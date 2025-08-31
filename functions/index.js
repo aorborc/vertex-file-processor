@@ -88,13 +88,57 @@ async function callVertex({ location, model, prompt, gsUri, mimeType, inlineData
   throw lastErr || new Error("All model attempts failed");
 }
 
-// Firestore helpers (use default database)
-function db() {
-  try { return new Firestore(); } catch { return null; }
+// Firestore helpers (support named DB with fallback to default on NOT_FOUND)
+function getFirestoreClient(named) {
+  try {
+    if (named) return new Firestore({ databaseId: named });
+    return new Firestore();
+  } catch (e) {
+    console.error("Firestore init error:", e?.message || e);
+    return null;
+  }
 }
 function hashId(str) { return crypto.createHash("sha256").update(String(str)).digest("hex"); }
-async function readCache(coll, id) { try { const d = await db().collection(coll).doc(id).get(); return d.exists ? d.data() : null; } catch { return null; } }
-async function writeCache(coll, id, data) { try { await db().collection(coll).doc(id).set({ ...data, updatedAt: new Date().toISOString() }); } catch { /* ignore */ } }
+async function readCache(coll, id) {
+  const named = process.env.FIRESTORE_DATABASE_ID;
+  const clients = [getFirestoreClient(named), !named ? null : getFirestoreClient(undefined)];
+  for (const client of clients) {
+    if (!client) continue;
+    try {
+      const d = await client.collection(coll).doc(id).get();
+      if (d.exists) return d.data();
+      return null; // doc not found is fine
+    } catch (e) {
+      // 5 NOT_FOUND indicates DB not found; try fallback
+      if (String(e?.code) === '5' || /NOT_FOUND/i.test(String(e?.message || ''))) {
+        console.warn(`Firestore readCache ${coll}/${id} NOT_FOUND on ${(client._settings && client._settings.databaseId) || 'default'}; trying fallback`);
+        continue;
+      }
+      console.warn(`Firestore readCache ${coll}/${id} error:`, e?.message || e);
+      return null;
+    }
+  }
+  return null;
+}
+async function writeCache(coll, id, data) {
+  const named = process.env.FIRESTORE_DATABASE_ID;
+  const clients = [getFirestoreClient(named), !named ? null : getFirestoreClient(undefined)];
+  for (const client of clients) {
+    if (!client) continue;
+    try {
+      await client.collection(coll).doc(id).set({ ...data, updatedAt: new Date().toISOString() });
+      return true;
+    } catch (e) {
+      if (String(e?.code) === '5' || /NOT_FOUND/i.test(String(e?.message || ''))) {
+        console.warn(`Firestore writeCache ${coll}/${id} NOT_FOUND on ${(client._settings && client._settings.databaseId) || 'default'}; trying fallback`);
+        continue;
+      }
+      console.warn(`Firestore writeCache ${coll}/${id} error:`, e?.message || e);
+      return false;
+    }
+  }
+  return false;
+}
 
 // Use the dedicated SA if provided, otherwise default runtime SA.
 const saEmail = process.env.FUNCTION_SERVICE_ACCOUNT || (projectId() ? `vertex-runner@${projectId()}.iam.gserviceaccount.com` : undefined);
@@ -104,6 +148,7 @@ const defaultEnv = {
   VERTEX_LOCATION: process.env.VERTEX_LOCATION || defaultRegion,
   VERTEX_MODEL: process.env.VERTEX_MODEL || "gemini-2.5-pro",
   VERTEX_INPUT: process.env.VERTEX_INPUT || "gcs", // gcs | inline
+  FIRESTORE_DATABASE_ID: process.env.FIRESTORE_DATABASE_ID || "sw-vertex-processor",
 };
 
 exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environmentVariables: defaultEnv }, async (req, res) => {
@@ -286,7 +331,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
 });
 
 // Signed URL function (ADC). GET ?gsUri=gs://bucket/path.pdf&ttlSec=900
-exports.signedUrl = onRequest({ cors: true, serviceAccount: saEmail }, async (req, res) => {
+exports.signedUrl = onRequest({ cors: true, serviceAccount: saEmail, environmentVariables: { FIRESTORE_DATABASE_ID: process.env.FIRESTORE_DATABASE_ID || "sw-vertex-processor" } }, async (req, res) => {
   try {
     const gsUri = req.query.gsUri || req.query.gcsUri;
     // GCS V4 signed URLs support a maximum of 7 days (604800s)

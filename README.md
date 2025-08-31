@@ -21,6 +21,9 @@ Repository
 - Repo: https://github.com/aorborc/vertex-file-processor
 - Already initialized and pushed on branch `main`.
 
+Full Documentation
+- See `docs/README.md` for comprehensive user + technical documentation (architecture, IAM, caching, deployment, troubleshooting, and API details).
+
 API
 - `POST /api/process-file`
   - body: `{ "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf", "prompt": "..." }`

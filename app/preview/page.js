@@ -165,7 +165,7 @@ export default function PreviewPage() {
           )}
         </div>
         <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-          Signed URL auto-refreshes as needed (up to 7 days per URL).
+          Preview URL auto-refreshes as needed (valid up to 7 days).
         </div>
       </div>
 
