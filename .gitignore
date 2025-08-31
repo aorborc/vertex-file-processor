@@ -12,3 +12,6 @@ out
 # OS
 .DS_Store
 
+
+# Ignore leaked service account JSON
+ gemini-lens-w9we5-5814ffe12089.json
