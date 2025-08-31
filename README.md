@@ -10,6 +10,7 @@ Setup
   - `GCS_BUCKET`: a bucket accessible by that service account (e.g. Firebase default bucket `gemini-lens-w9we5.appspot.com`)
   - `VERTEX_LOCATION` (optional): defaults to `us-central1`
   - `VERTEX_MODEL` (optional): defaults to `gemini-2.5-pro` (set to another supported model like `gemini-2.5-flash` or `gemini-2.0-flash-001`)
+  - `FIRESTORE_DATABASE_ID` (optional): defaults to `(default)`; set to your named database id (e.g., `sw-vertex-processor`) if you use multi-db
 
 Install & Run
 - `npm install`
@@ -17,15 +18,8 @@ Install & Run
 - Open http://localhost:3000
 
 Repository
-- Local git is initialized in `vertex-file-processor/` on branch `main`.
-- Create and push a GitHub repo (works across gh versions):
-  - `cd vertex-file-processor`
-  - `gh repo create vertex-file-processor --public -y`  # creates remote under your account
-  - If remote wasn’t added automatically:
-    - `git remote add origin https://github.com/<your-username>/vertex-file-processor.git`
-  - `git push -u origin main`
-- Repo URL (replace with your username):
-  - https://github.com/<your-username>/vertex-file-processor
+- Repo: https://github.com/aorborc/vertex-file-processor
+- Already initialized and pushed on branch `main`.
 
 API
 - `POST /api/process-file`
@@ -126,6 +120,7 @@ Response (sample)
 Notes
 - Do not commit real credentials. Use `.env.local` for local development.
 - The route runs on the Node.js runtime (not Edge) due to GCS usage.
+ - Firestore access uses server SDK + IAM. Security rules aren’t required for server access. No composite indexes are needed for the cache.
 
 Firebase Cloud Functions (ADC) setup
 - Create dedicated service account (recommended): `vertex-runner@<project>.iam.gserviceaccount.com` with:

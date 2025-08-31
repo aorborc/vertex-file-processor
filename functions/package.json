@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.13.0",
+    "@google-cloud/firestore": "^7.11.0",
     "axios": "^1.7.7",
     "firebase-functions": "^4.9.0",
     "google-auth-library": "^9.14.2"

@@ -2,7 +2,9 @@ const { onRequest } = require("firebase-functions/v2/https");
 const { setGlobalOptions } = require("firebase-functions/v2/options");
 const axios = require("axios");
 const { Storage } = require("@google-cloud/storage");
+const { Firestore } = require("@google-cloud/firestore");
 const { GoogleAuth } = require("google-auth-library");
+const crypto = require("crypto");
 
 // Global defaults
 const defaultRegion = process.env.VERTEX_LOCATION || "us-central1";
@@ -86,6 +88,14 @@ async function callVertex({ location, model, prompt, gsUri, mimeType, inlineData
   throw lastErr || new Error("All model attempts failed");
 }
 
+// Firestore helpers (use default database)
+function db() {
+  try { return new Firestore(); } catch { return null; }
+}
+function hashId(str) { return crypto.createHash("sha256").update(String(str)).digest("hex"); }
+async function readCache(coll, id) { try { const d = await db().collection(coll).doc(id).get(); return d.exists ? d.data() : null; } catch { return null; } }
+async function writeCache(coll, id, data) { try { await db().collection(coll).doc(id).set({ ...data, updatedAt: new Date().toISOString() }); } catch { /* ignore */ } }
+
 // Use the dedicated SA if provided, otherwise default runtime SA.
 const saEmail = process.env.FUNCTION_SERVICE_ACCOUNT || (projectId() ? `vertex-runner@${projectId()}.iam.gserviceaccount.com` : undefined);
 
@@ -103,6 +113,8 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     }
 
     const { fileUrl, prompt } = req.body || {};
+    const resetRaw = (req.query && req.query.reset) || (req.body && req.body.reset);
+    const reset = String(resetRaw).toLowerCase() === 'true' || resetRaw === 1 || resetRaw === '1';
     if (!fileUrl) return res.status(400).json({ error: "Missing fileUrl" });
     const isGs = typeof fileUrl === "string" && fileUrl.startsWith("gs://");
     if (!isGs && !validateUrl(fileUrl)) return res.status(400).json({ error: "Invalid fileUrl (must be http/https or gs://)" });
@@ -122,23 +134,40 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       gsUri = fileUrl;
       contentType = guessMimeTypeFromUrl(gsUri);
     } else {
-      const mimeFromUrl = guessMimeTypeFromUrl(fileUrl);
-      const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 60_000 });
-      bufferForInline = Buffer.from(response.data);
-      contentType = response.headers["content-type"] || mimeFromUrl;
+      const urlDocId = hashId(fileUrl);
+      const urlCached = await readCache('urlCache', urlDocId);
+      if (urlCached && urlCached.gsUri) {
+        gsUri = urlCached.gsUri;
+        contentType = urlCached.contentType || guessMimeTypeFromUrl(gsUri);
+      } else {
+        const mimeFromUrl = guessMimeTypeFromUrl(fileUrl);
+        const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 60_000 });
+        bufferForInline = Buffer.from(response.data);
+        contentType = response.headers["content-type"] || mimeFromUrl;
 
-      const bucket = storage.bucket(bkt);
-      const ts = Date.now();
-      const rand = Math.random().toString(36).slice(2, 8);
-      const ext = contentType.includes("pdf") ? "pdf" : (mimeFromUrl.endsWith("pdf") ? "pdf" : "bin");
-      const destination = `uploads/${ts}-${rand}.${ext}`;
-      const file = bucket.file(destination);
-      try {
-        await file.save(bufferForInline, { contentType });
-      } catch (e) {
-        return res.status(500).json({ error: `Failed to write to bucket ${bkt}: ${e?.message || e}` });
+        const bucket = storage.bucket(bkt);
+        const ts = Date.now();
+        const rand = Math.random().toString(36).slice(2, 8);
+        const ext = contentType.includes("pdf") ? "pdf" : (mimeFromUrl.endsWith("pdf") ? "pdf" : "bin");
+        const destination = `uploads/${ts}-${rand}.${ext}`;
+        const file = bucket.file(destination);
+        try {
+          await file.save(bufferForInline, { contentType });
+        } catch (e) {
+          return res.status(500).json({ error: `Failed to write to bucket ${bkt}: ${e?.message || e}` });
+        }
+        gsUri = `gs://${bkt}/${destination}`;
+        await writeCache('urlCache', urlDocId, { sourceUrl: fileUrl, gsUri, contentType, size: bufferForInline?.length || null, createdAt: new Date().toISOString() });
       }
-      gsUri = `gs://${bkt}/${destination}`;
+    }
+
+    // Process result cache by gsUri+prompt+model
+    const procId = hashId(`${gsUri}|${model}|${prompt}`);
+    if (!reset) {
+      const procCached = await readCache('processCache', procId);
+      if (procCached && procCached.vertex) {
+        return res.status(200).json({ success: true, gcsUri: gsUri, cachedProcess: true, cachedAt: procCached.updatedAt || procCached.createdAt || null, extracted: procCached.extracted || null, extractedRaw: procCached.extractedRaw || null, vertex: procCached.vertex });
+      }
     }
 
     // Decide input mode: gcs or inline
@@ -218,7 +247,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
           if (!item || typeof item !== "object") return item;
           const li = { ...item };
           const baseConf = typeof item.confidence === "number" ? item.confidence : null;
-          ["description", "quantity", "unit_price", "amount"].forEach((f) => {
+          ["description", "indent_qty", "dispatch_qty", "received_qty", "quantity", "unit_price", "amount"].forEach((f) => {
             const key = `${f}_confidence`;
             if (li[key] == null && baseConf != null && (f in li)) li[key] = baseConf;
           });
@@ -232,6 +261,17 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     const modelJson = parseJsonLoose(modelText);
     const modelJsonWithConfidence = withFieldConf(modelJson);
 
+    // cache process result best-effort
+    await writeCache('processCache', procId, {
+      gcsUri: gsUri,
+      model,
+      prompt,
+      vertex,
+      extracted: modelJsonWithConfidence || null,
+      extractedRaw: modelJson || null,
+      createdAt: new Date().toISOString(),
+    });
+
     return res.status(200).json({
       success: true,
       gcsUri: gsUri,
@@ -242,5 +282,36 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err?.message || "Unknown error" });
+  }
+});
+
+// Signed URL function (ADC). GET ?gsUri=gs://bucket/path.pdf&ttlSec=900
+exports.signedUrl = onRequest({ cors: true, serviceAccount: saEmail }, async (req, res) => {
+  try {
+    const gsUri = req.query.gsUri || req.query.gcsUri;
+    // GCS V4 signed URLs support a maximum of 7 days (604800s)
+    const MAX_TTL = 7 * 24 * 60 * 60; // 604800 seconds
+    const ttlSec = Math.min(MAX_TTL, Math.max(60, Number(req.query.ttlSec || 600)));
+    if (!gsUri || typeof gsUri !== 'string' || !gsUri.startsWith('gs://'))
+      return res.status(400).json({ error: 'Missing or invalid gsUri' });
+    const m = /^gs:\/\/([^\/]+)\/(.+)$/.exec(gsUri);
+    if (!m) return res.status(400).json({ error: 'Invalid gsUri' });
+    const [_, bucket, name] = m;
+    // cache check
+    const cacheId = hashId(gsUri);
+    const cached = await readCache('signedUrlCache', cacheId);
+    const now = Date.now();
+    if (cached && cached.url && cached.expires && (cached.expires - now) > 60 * 1000) {
+      return res.status(200).json({ url: cached.url, expires: cached.expires });
+    }
+
+    const storage = new Storage();
+    const file = storage.bucket(bucket).file(name);
+    const expires = Date.now() + ttlSec * 1000;
+    const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires });
+    await writeCache('signedUrlCache', cacheId, { gsUri, url, expires, createdAt: new Date().toISOString() });
+    return res.status(200).json({ url, expires });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || String(e) });
   }
 });

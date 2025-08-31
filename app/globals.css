@@ -1,0 +1,64 @@
+:root{
+  /* Modern, vivid palette */
+  --bg:#f8fafc;           /* slate-50 */
+  --bg-card:#ffffff;      /* white */
+  --text:#0f172a;         /* slate-900 */
+  --muted:#64748b;        /* slate-500 */
+  --border:#e2e8f0;       /* slate-200 */
+  --primary:#ff5200;      /* vivid orange */
+  --primary-700:#cc4100;  /* darker orange */
+  --accent:#16a34a;       /* green-600 */
+  --warn:#f59e0b;         /* amber-500 */
+  --danger:#ef4444;       /* red-500 */
+  --radius:10px;
+  --shadow:0 1px 2px rgba(2,6,23,.04),0 6px 12px rgba(2,6,23,.06);
+}
+
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+.container{max-width:100%;margin:0 auto;padding:24px}
+.container-fluid{max-width:100%;padding:24px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.brand{font-size:22px;margin:0}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
+.muted{color:var(--muted)}
+.row{display:flex;gap:12px;align-items:center}
+.grid{display:grid;gap:12px}
+
+.btn{appearance:none;border:0;background:var(--primary);color:#fff;border-radius:8px;padding:10px 14px;font-weight:600;cursor:pointer}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn:hover{background:var(--primary-700)}
+.btn.secondary{background:var(--accent)}
+.btn.warn{background:var(--warn)}
+.btn .icon{display:inline-block;width:16px;height:16px;margin-right:8px;vertical-align:-2px;fill:currentColor}
+.btn.danger{background:var(--danger)}
+
+.input, .textarea{width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);box-sizing:border-box}
+.input{white-space:nowrap;overflow-x:auto;flex:1 1 auto;min-width:0}
+.textarea{min-height:120px;resize:vertical}
+.label{display:grid;gap:6px}
+
+/* Input with trailing confidence badge */
+.input-wrap{position:relative;max-width:360px;display:flex;align-items:center;gap:8px;overflow:visible;width:100%}
+.input.trailing{padding-right:0}
+.input-trailing-badge{position:static;top:auto;right:auto;transform:none;font-size:12px;color:var(--muted);background:#fff;padding:2px 6px;border-radius:6px;border:1px solid var(--border);pointer-events:none;min-width:30px;text-align:center;flex:0 0 auto}
+
+/* Leading currency icon */
+.input.leading{padding-left:28px}
+.input-leading-icon{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:14px;color:var(--muted);pointer-events:none}
+
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#ddeaf6;color:#245b8a;font-size:12px;border:1px solid var(--border)}
+
+.split{display:grid;grid-template-columns:2fr 1fr;gap:16px;height:calc(100vh - 90px)}
+.panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.panel-scroll{overflow:scroll}
+.viewer{flex:1;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}
+.scroll{overflow:auto}
+.mono{font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas, "Liberation Mono", "Courier New", monospace}
+.code{background:#f7f9fb;border:1px solid var(--border);padding:12px;border-radius:8px;overflow:auto}
