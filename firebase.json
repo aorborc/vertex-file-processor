@@ -1,0 +1,20 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "source": ".",
+    "frameworksBackend": {
+      "region": "us-central1"
+    },
+    "rewrites": [
+      {
+        "source": "/api/process-file",
+        "function": {
+          "functionId": "processFile",
+          "region": "us-central1"
+        }
+      }
+    ]
+  }
+}

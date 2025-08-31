@@ -1,0 +1,20 @@
+{
+  "name": "vertex-file-processor",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@google-cloud/storage": "^7.13.0",
+    "axios": "^1.7.7",
+    "google-auth-library": "^9.14.2",
+    "next": "^14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "firebase-frameworks": "^0.11.0",
+    "firebase-functions": "^6.0.1",
+    "firebase-admin": "^11.11.1"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "server.js"
+}

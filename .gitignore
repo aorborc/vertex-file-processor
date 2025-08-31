@@ -1,0 +1,14 @@
+# Node
+node_modules
+.npm
+
+# Next.js
+.next
+out
+
+# Env
+.env*
+
+# OS
+.DS_Store
+
