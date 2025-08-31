@@ -16,6 +16,17 @@ Install & Run
 - `npm run dev`
 - Open http://localhost:3000
 
+Repository
+- Local git is initialized in `vertex-file-processor/` on branch `main`.
+- Create and push a GitHub repo (works across gh versions):
+  - `cd vertex-file-processor`
+  - `gh repo create vertex-file-processor --public -y`  # creates remote under your account
+  - If remote wasn’t added automatically:
+    - `git remote add origin https://github.com/<your-username>/vertex-file-processor.git`
+  - `git push -u origin main`
+- Repo URL (replace with your username):
+  - https://github.com/<your-username>/vertex-file-processor
+
 API
 - `POST /api/process-file`
   - body: `{ "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf", "prompt": "..." }`
