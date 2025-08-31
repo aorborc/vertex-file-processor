@@ -347,7 +347,7 @@ exports.signedUrl = onRequest({ cors: true, serviceAccount: saEmail, environment
     const cached = await readCache('signedUrlCache', cacheId);
     const now = Date.now();
     if (cached && cached.url && cached.expires && (cached.expires - now) > 60 * 1000) {
-      return res.status(200).json({ url: cached.url, expires: cached.expires });
+      return res.status(200).json({ url: cached.url, expires: cached.expires, cached: true, cachedAt: cached.updatedAt || cached.createdAt || null });
     }
 
     const storage = new Storage();
@@ -355,7 +355,7 @@ exports.signedUrl = onRequest({ cors: true, serviceAccount: saEmail, environment
     const expires = Date.now() + ttlSec * 1000;
     const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires });
     await writeCache('signedUrlCache', cacheId, { gsUri, url, expires, createdAt: new Date().toISOString() });
-    return res.status(200).json({ url, expires });
+    return res.status(200).json({ url, expires, cached: false });
   } catch (e) {
     return res.status(500).json({ error: e?.message || String(e) });
   }

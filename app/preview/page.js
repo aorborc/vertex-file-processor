@@ -12,6 +12,7 @@ export default function PreviewPage() {
   const router = useRouter();
   const [gcsUri, setGcsUri] = useState("");
   const [viewerUrl, setViewerUrl] = useState("");
+  const [signedMeta, setSignedMeta] = useState(null);
   const [extracted, setExtracted] = useState(null);
   const [raw, setRaw] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,6 +51,7 @@ export default function PreviewPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || "Failed to create signed URL");
         setViewerUrl(data.url);
+        setSignedMeta({ cached: !!data.cached, cachedAt: data.cachedAt || null, expires: data.expires });
       } catch (e) {
         setError(e.message || String(e));
       } finally { setLoading(false); }
@@ -164,8 +166,20 @@ export default function PreviewPage() {
             <div style={{ padding: 16, color: '#555' }}>{loading ? 'Generating viewer…' : 'Enter a gs:// URI to preview.'}</div>
           )}
         </div>
-        <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-          Preview URL auto-refreshes as needed (valid up to 7 days).
+        <div className="card" style={{ marginTop: 8, padding: 10 }}>
+          <div className="row" style={{ justifyContent:'space-between', alignItems:'center' }}>
+            <strong>Preview URL</strong>
+            {signedMeta?.cached && (
+              <span className="badge" title={(() => { const ts = signedMeta?.cachedAt ? Date.parse(signedMeta.cachedAt) : NaN; if (!Number.isNaN(ts)) { const mins = Math.max(0, Math.floor((Date.now()-ts)/60000)); return `Cached ${mins} min${mins===1?'':'s'} ago`; } return 'Cached'; })()}>
+                Cache: HIT
+              </span>
+            )}
+          </div>
+          {viewerUrl ? (
+            <div className="mono" style={{ whiteSpace:'nowrap', overflowX:'auto', fontSize:12, marginTop:6 }}>{viewerUrl}</div>
+          ) : (
+            <div className="muted" style={{ fontSize: 12 }}>Generate a preview to see the URL.</div>
+          )}
         </div>
       </div>
 
