@@ -66,7 +66,7 @@ function buildPrompt() {
     "Instructions:",
     "- Return ONLY JSON, no prose, code fences, or comments.",
     "- Confidence scores must be floats between 0 and 1 for each field in fields_confidence.",
-    "- Dates must be in DD-MMM-YYYY format.",
+    "- Dates must be in YYYY-MM-DD format.",
     "- Amount fields must be numbers (not strings), in the invoice currency.",
     "- If a field is missing on the invoice, leave it as an empty string (for text fields) or 0 (for numeric).",
     "- Do NOT include any additional keys (no line_items, no extra metadata).",
@@ -155,8 +155,15 @@ export async function POST(request) {
     const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
     const dbId = process.env.FIRESTORE_DATABASE_ID || "(default)";
 
-    const records = await fetchZohoFiles({ reportUrl: zohoReportUrl, count });
-    if (!records.length) return new Response(JSON.stringify({ error: "Zoho report returned no records" }), { status: 404 });
+    const recordsRaw = await fetchZohoFiles({ reportUrl: zohoReportUrl, count: Math.max(count, 200) });
+    // Prefer entries that have a valid upload_invoice filepath
+    const eligible = [];
+    for (const r of recordsRaw) {
+      const fp = parseZohoFilePath(r?.upload_invoice);
+      if (fp) eligible.push(r);
+      if (eligible.length >= count) break;
+    }
+    if (!eligible.length) return new Response(JSON.stringify({ error: "Zoho report returned no eligible records with upload_invoice filepath" }), { status: 404 });
 
     // Light concurrency to keep load reasonable
     const concurrency = Math.max(1, Math.min(6, Number(process.env.SAMPLING_CONCURRENCY || 4)));
@@ -166,8 +173,8 @@ export async function POST(request) {
     let idx = 0;
 
     const runNext = async () => {
-      while (active < concurrency && idx < records.length) {
-        const rec = records[idx++];
+      while (active < concurrency && idx < eligible.length) {
+        const rec = eligible[idx++];
         active++;
         (async () => {
           try {
@@ -188,7 +195,7 @@ export async function POST(request) {
             await commitUpsert({ projectId, databaseId: dbId, collection: "Sampling", docId: String(recordId), data: payload });
             results.push({ recordId, avg_confidence_score: avg, zohoDownloadUrl: fileUrl });
           } catch (e) {
-            results.push({ error: String(e?.message || e) });
+            results.push({ error: String(e?.message || e), recordId: rec?.ID || null });
           } finally {
             active--;
             runNext();
@@ -198,21 +205,104 @@ export async function POST(request) {
     };
     await runNext();
     // Wait for all to drain
-    while (active > 0 || idx < records.length) {
+    while (active > 0 || idx < eligible.length) {
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, 100));
     }
 
     const successes = results.filter((r) => !r.error);
+    const errors = results.filter((r) => !!r.error);
     const avgOverall = successes.length ? successes.reduce((a, b) => a + (b.avg_confidence_score || 0), 0) / successes.length : 0;
     return new Response(JSON.stringify({
       success: true,
       processed: successes.length,
-      failed: results.length - successes.length,
+      failed: errors.length,
       avg_confidence_overall: avgOverall,
       results: successes,
+      errors,
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (err) {
-    return new Response(JSON.stringify({ error: err?.message || "Unknown error" }), { status: 500 });
+    return new Response(JSON.stringify({ error: err?.message || "Unknown error", where: "sampling" }), { status: 500 });
+  }
+}
+
+export async function GET(request) {
+  // Convenience GET trigger: /api/sampling?count=4 or &reportUrl=...
+  try {
+    const url = new URL(request.url);
+    const reportUrlEnv = process.env.ZC_FILES_REPORT_URL || "";
+    const zohoReportUrl = url.searchParams.get("reportUrl") || reportUrlEnv;
+    const count = Math.min(200, Math.max(1, Number(url.searchParams.get("count") || 200)));
+
+    if (!zohoReportUrl) {
+      return new Response(JSON.stringify({ error: "Missing Zoho report URL. Set ZC_FILES_REPORT_URL env or pass reportUrl query" }), { status: 400 });
+    }
+    const privateLink = extractPrivateLink(zohoReportUrl) || process.env.ZC_PRIVATE_LINK;
+    if (!privateLink) {
+      return new Response(JSON.stringify({ error: "Missing Zoho privatelink. Ensure reportUrl has ?privatelink=... or set ZC_PRIVATE_LINK env" }), { status: 400 });
+    }
+
+    const bucketName = process.env.GCS_BUCKET;
+    if (!bucketName) return new Response(JSON.stringify({ error: "Server missing GCS_BUCKET env" }), { status: 500 });
+    const projectId = (await getProjectId()) || process.env.GOOGLE_CLOUD_PROJECT;
+    const location = process.env.VERTEX_LOCATION || "us-central1";
+    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const dbId = process.env.FIRESTORE_DATABASE_ID || "(default)";
+
+    const recordsRaw = await fetchZohoFiles({ reportUrl: zohoReportUrl, count: Math.max(count, 200) });
+    const eligible = [];
+    for (const r of recordsRaw) {
+      const fp = parseZohoFilePath(r?.upload_invoice);
+      if (fp) eligible.push(r);
+      if (eligible.length >= count) break;
+    }
+    if (!eligible.length) return new Response(JSON.stringify({ error: "Zoho report returned no eligible records with upload_invoice filepath" }), { status: 404 });
+
+    const concurrency = Math.max(1, Math.min(6, Number(process.env.SAMPLING_CONCURRENCY || 4)));
+    const queue = [];
+    const results = [];
+    let active = 0;
+    let idx = 0;
+
+    const runNext = async () => {
+      while (active < concurrency && idx < eligible.length) {
+        const rec = eligible[idx++];
+        active++;
+        (async () => {
+          try {
+            const recordId = rec?.ID || rec?.id || String(idx);
+            const fp = parseZohoFilePath(rec?.upload_invoice);
+            const fileUrl = buildZohoDownloadUrl({ recordId, filePath: fp, privateLink });
+            if (!fileUrl) throw new Error("Unable to construct Zoho file URL");
+            const { gsUri, parsed, avg } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
+            const payload = {
+              recordId,
+              zohoFilePath: fp,
+              zohoDownloadUrl: fileUrl,
+              gcsUri: gsUri,
+              extracted: parsed || null,
+              avg_confidence_score: avg,
+              createdAt: new Date().toISOString(),
+            };
+            await commitUpsert({ projectId, databaseId: dbId, collection: "Sampling", docId: String(recordId), data: payload });
+            results.push({ recordId, avg_confidence_score: avg, zohoDownloadUrl: fileUrl });
+          } catch (e) {
+            results.push({ error: String(e?.message || e), recordId: rec?.ID || null });
+          } finally {
+            active--;
+            runNext();
+          }
+        })();
+      }
+    };
+    await runNext();
+    while (active > 0 || idx < eligible.length) { await new Promise((r) => setTimeout(r, 100)); }
+
+    const successes = results.filter((r) => !r.error);
+    const errors = results.filter((r) => !!r.error);
+    const avgOverall = successes.length ? successes.reduce((a, b) => a + (b.avg_confidence_score || 0), 0) / successes.length : 0;
+    return new Response(JSON.stringify({ success: true, processed: successes.length, failed: errors.length, avg_confidence_overall: avgOverall, results: successes, errors }), { status: 200, headers: { "Content-Type": "application/json" } });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: err?.message || "Unknown error", where: "sampling.get" }), { status: 500 });
   }
 }

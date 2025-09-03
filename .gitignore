@@ -15,3 +15,6 @@ out
 
 # Ignore leaked service account JSON
 gemini-lens-w9we5-5814ffe12089.json
+
+# Local service account keys
+keys/
