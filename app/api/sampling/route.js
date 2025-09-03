@@ -127,7 +127,12 @@ async function processOne({ fileUrl, projectId, location, model, bucketName, rec
   const parsed = parseJsonLoose(text) || {};
   const avg = calcAvgConfidence(parsed);
 
-  return { gsUri, vertex, parsed, avg };
+  // Pull usage metadata if available
+  const usage = vertex?.usageMetadata || vertex?.usage || null;
+  const inputTokens = usage?.promptTokenCount ?? usage?.input_tokens ?? null;
+  const outputTokens = usage?.candidatesTokenCount ?? usage?.output_tokens ?? null;
+
+  return { gsUri, vertex, parsed, avg, usage: usage || null, inputTokens, outputTokens, sizeBytes: buffer.length };
 }
 
 export async function POST(request) {
@@ -182,7 +187,7 @@ export async function POST(request) {
             const fp = parseZohoFilePath(rec?.upload_invoice);
             const fileUrl = buildZohoDownloadUrl({ recordId, filePath: fp, privateLink });
             if (!fileUrl) throw new Error("Unable to construct Zoho file URL");
-            const { gsUri, parsed, avg } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
+            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
             const payload = {
               recordId,
               zohoFilePath: fp,
@@ -190,6 +195,10 @@ export async function POST(request) {
               gcsUri: gsUri,
               extracted: parsed || null,
               avg_confidence_score: avg,
+              vertex_usage: usage || null,
+              inputTokens: inputTokens ?? null,
+              outputTokens: outputTokens ?? null,
+              sizeBytes: sizeBytes ?? null,
               createdAt: new Date().toISOString(),
             };
             await commitUpsert({ projectId, databaseId: dbId, collection: "Sampling", docId: String(recordId), data: payload });
@@ -274,7 +283,7 @@ export async function GET(request) {
             const fp = parseZohoFilePath(rec?.upload_invoice);
             const fileUrl = buildZohoDownloadUrl({ recordId, filePath: fp, privateLink });
             if (!fileUrl) throw new Error("Unable to construct Zoho file URL");
-            const { gsUri, parsed, avg } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
+            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
             const payload = {
               recordId,
               zohoFilePath: fp,
@@ -282,6 +291,10 @@ export async function GET(request) {
               gcsUri: gsUri,
               extracted: parsed || null,
               avg_confidence_score: avg,
+              vertex_usage: usage || null,
+              inputTokens: inputTokens ?? null,
+              outputTokens: outputTokens ?? null,
+              sizeBytes: sizeBytes ?? null,
               createdAt: new Date().toISOString(),
             };
             await commitUpsert({ projectId, databaseId: dbId, collection: "Sampling", docId: String(recordId), data: payload });
