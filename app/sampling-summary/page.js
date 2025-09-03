@@ -72,11 +72,17 @@ export default function SamplingSummaryPage() {
     setLoading(true);
     setError(null);
     try {
-      // Use summary API (minimal), recompute with our rules locally
-      const res = await fetch("/api/sampling-summary", { cache: "no-store" });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || `Summary failed: ${res.status}`);
-      setData(json);
+      // Use summary API; be robust to HTML error responses in dev
+      const res = await fetch("/api/sampling-summary", { cache: "no-store", headers: { Accept: "application/json" } });
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      if (ct.includes("application/json")) {
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.error || `Summary failed: ${res.status}`);
+        setData(json);
+      } else {
+        const text = await res.text();
+        throw new Error(`Summary failed: ${res.status} ${text.slice(0,300)}`);
+      }
     } catch (e) {
       setError(String(e?.message || e));
     } finally {
