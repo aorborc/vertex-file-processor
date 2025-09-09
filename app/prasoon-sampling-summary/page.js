@@ -63,6 +63,8 @@ export default function PrasoonSamplingSummaryPage() {
     return base.filter((r) => {
       // recordId
       if (f.recordId && !String(r.recordId||'').toLowerCase().includes(String(f.recordId).toLowerCase())) return false;
+      // file name
+      if (f.driveFileName && !String(r.driveFileName||'').toLowerCase().includes(String(f.driveFileName).toLowerCase())) return false;
       for (const k of FIELD_KEYS) {
         const fv = String(f[k] || '').trim();
         if (!fv) continue;
@@ -79,6 +81,7 @@ export default function PrasoonSamplingSummaryPage() {
     arr.sort((a, b) => {
       if (sortKey === 'avg') return dir * (rowAvg(a) - rowAvg(b));
       if (sortKey === 'recordId') return dir * String(a.recordId||'').localeCompare(String(b.recordId||''));
+      if (sortKey === 'driveFileName') return dir * String(a.driveFileName||'').localeCompare(String(b.driveFileName||''));
       if (FIELD_KEYS.includes(sortKey)) {
         const av = a?.fields?.[sortKey]; const bv = b?.fields?.[sortKey];
         const an = Number(av); const bn = Number(bv);
@@ -133,7 +136,7 @@ export default function PrasoonSamplingSummaryPage() {
           <thead>
             <tr>
               <th style={{ position:'sticky', top:0, zIndex:1, borderBottom: `1px solid ${COLORS.border}`, textAlign:'left', padding:10, background:'#fafbff', cursor:'pointer' }} onClick={()=>{ setSortKey('recordId'); setSortDir(sortKey==='recordId' && sortDir==='asc' ? 'desc' : 'asc'); }}>Record ID</th>
-              <th style={{ position:'sticky', top:0, zIndex:1, borderBottom: `1px solid ${COLORS.border}`, textAlign:'left', padding:10, background:'#fafbff' }}>Download</th>
+              <th style={{ position:'sticky', top:0, zIndex:1, borderBottom: `1px solid ${COLORS.border}`, textAlign:'left', padding:10, background:'#fafbff', cursor:'pointer', minWidth: 200 }} onClick={()=>{ setSortKey('driveFileName'); setSortDir(sortKey==='driveFileName' && sortDir==='asc' ? 'desc' : 'asc'); }}>Download</th>
               <th style={{ position:'sticky', top:0, zIndex:1, borderBottom: `1px solid ${COLORS.border}`, textAlign:'right', padding:10, background:'#fafbff', cursor:'pointer' }} onClick={()=>{ setSortKey('avg'); setSortDir(sortKey==='avg' && sortDir==='asc' ? 'desc' : 'asc'); }}>Avg Confidence (%)</th>
               {FIELD_KEYS.map((k) => (
                 <th key={k} style={{ position:'sticky', top:0, zIndex:1, borderBottom: `1px solid ${COLORS.border}`, textAlign:'left', padding:10, background:'#fafbff', cursor:'pointer' }} onClick={()=>{ setSortKey(k); setSortDir(sortKey===k && sortDir==='asc' ? 'desc' : 'asc'); }}>{k}</th>
@@ -145,7 +148,7 @@ export default function PrasoonSamplingSummaryPage() {
                 <input className="input" placeholder="filter id" value={filters.recordId||''} onChange={(e)=>setFilters((f)=>({ ...f, recordId: e.target.value }))} />
               </th>
               <th style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 8 }}>
-                <span style={{ color: COLORS.subText, fontSize: 12 }}>drive link</span>
+                <input className="input" placeholder="filter file name" value={filters.driveFileName||''} onChange={(e)=>setFilters((f)=>({ ...f, driveFileName: e.target.value }))} />
               </th>
               <th style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 8 }}>
                 <span style={{ color: COLORS.subText, fontSize: 12 }}>avg</span>
@@ -168,7 +171,7 @@ export default function PrasoonSamplingSummaryPage() {
                       <RetryButton recordId={r.recordId} visible={true} big={true} />
                     )}
                   </td>
-                <td style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 10, maxWidth: 360, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                <td style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 10, whiteSpace:'normal', wordBreak:'break-word', minWidth: 200 }}>
                   {r.downloadUrl ? (
                     <a href={r.downloadUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, textDecoration:'none' }}>
                       {r.driveFileName || 'view invoice'}
