@@ -31,7 +31,7 @@ Drive Sampling (Prasoon)
   - Lists PDFs in a Google Drive folder, downloads via Drive API, uploads to GCS, calls Vertex with invoice-only schema, and stores in Firestore collection `Sampling` with `tag='prasoon-sampling'`.
   - Requires runtime identity to have Drive read access to the folder.
 - GET /prasoon-sampling-summary
-  - UI summary with: column filtering, sorting, toggle to show only rows missing Invoice_Number, “view invoice” link to Drive, and overall average that includes all rows (rows without Invoice_Number contribute 0).
+  - UI summary with: column filtering, sorting, toggle to show only rows missing Invoice_Number, and a download column that shows the Drive file name linked to Drive. Overall average includes all rows (rows without Invoice_Number contribute 0).
 - POST /api/prasoon-retry { recordId }
   - Reprocesses a stored `gcsUri` for one record via Vertex and updates `extracted` and `avg_confidence_score` (average computed ignoring 0 confidences per-field).
 

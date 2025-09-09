@@ -168,8 +168,14 @@ export default function PrasoonSamplingSummaryPage() {
                       <RetryButton recordId={r.recordId} visible={true} big={true} />
                     )}
                   </td>
-                <td style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 10, maxWidth: 320, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                  {r.downloadUrl ? <a href={r.downloadUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, textDecoration:'none' }}>view invoice</a> : '-'}
+                <td style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 10, maxWidth: 360, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {r.downloadUrl ? (
+                    <a href={r.downloadUrl} target="_blank" rel="noreferrer" style={{ color: COLORS.accent, textDecoration:'none' }}>
+                      {r.driveFileName || 'view invoice'}
+                    </a>
+                  ) : (
+                    r.driveFileName || '-'
+                  )}
                 </td>
                 <td style={{ borderBottom: `1px solid ${COLORS.border}`, padding: 10, textAlign:'right' }}>{percent(rowAvg(r))}</td>
                 {FIELD_KEYS.map((k) => (

@@ -33,7 +33,7 @@ Prasoon Sampling (Google Drive)
   - UI features:
     - Sort columns and filter per-column.
     - Toggle to show only rows without `Invoice_Number`.
-    - “view invoice” link to the Drive file.
+    - Download column shows the Drive file name linked to the Drive file.
     - Overall average includes all rows (missing invoice rows counted as 0).
 - POST `/api/prasoon-retry` with `{ "recordId": "<Firestore doc id>" }`
   - Reprocesses a single record’s `gcsUri` via Vertex with the 19-field schema and updates Firestore (`extracted`, `avg_confidence_score`, usage metrics). Used by the Summary page’s contextual “Retry” action on rows missing an invoice.

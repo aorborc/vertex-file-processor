@@ -44,6 +44,7 @@ export async function GET(request) {
       recordId: docIdFromName(r.docName) || r.fields.recordId || null,
       gcsUri: r.fields.gcsUri || null,
       downloadUrl: r.fields.driveViewUrl || null,
+      driveFileName: r.fields.driveFileName || null,
       fields: r.fields.extracted?.fields || null,
       fields_confidence: r.fields.extracted?.fields_confidence || null,
       createdAt: r.fields.createdAt || null,
