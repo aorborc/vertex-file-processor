@@ -24,6 +24,27 @@ Repository
 Full Documentation
 - See `docs/README.md` for comprehensive user + technical documentation (architecture, IAM, caching, deployment, troubleshooting, and API details).
 
+Prasoon Sampling (Google Drive)
+- POST `/api/prasoon-sampling` with `{ "folderIdOrLink": "<Drive folder ID or URL>", "count": 185 }`
+  - Lists PDFs in the Drive folder, downloads each via Drive API, uploads to GCS, processes with Vertex using invoice-level fields only (no line items), and stores results in Firestore `Sampling` with `tag = "prasoon-sampling"`.
+  - Requires that the runtime identity has Drive read access. For production, share the folder with the service account used by Hosting/Functions.
+- GET `/prasoon-sampling-summary` (optional `?folderId=<id>`)
+  - Displays a summary filtered to `tag=prasoon-sampling` with per-invoice confidences.
+  - UI features:
+    - Sort columns and filter per-column.
+    - Toggle to show only rows without `Invoice_Number`.
+    - “view invoice” link to the Drive file.
+    - Overall average includes all rows (missing invoice rows counted as 0).
+- POST `/api/prasoon-retry` with `{ "recordId": "<Firestore doc id>" }`
+  - Reprocesses a single record’s `gcsUri` via Vertex with the 19-field schema and updates Firestore (`extracted`, `avg_confidence_score`, usage metrics). Used by the Summary page’s contextual “Retry” action on rows missing an invoice.
+
+Local Dev Notes (Drive API)
+- Grant ADC with Drive scope and a quota project when developing locally:
+  - `gcloud auth application-default set-quota-project <projectId>`
+  - `gcloud services enable drive.googleapis.com --project <projectId>`
+  - `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/drive.readonly`
+- In production, ensure the Drive folder is shared with the Hosting SSR service account (e.g., `firebase-app-hosting-compute@<project>.iam.gserviceaccount.com`).
+
 API
 - `POST /api/process-file`
   - body: `{ "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf", "prompt": "..." }`

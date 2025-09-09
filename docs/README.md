@@ -26,10 +26,28 @@ Environments & Endpoints
   - NEXT_PUBLIC_API_BASE_URL=https://us-central1-<project>.cloudfunctions.net/processFile
   - NEXT_PUBLIC_SIGNED_URL_API_BASE=https://us-central1-<project>.cloudfunctions.net/signedUrl
 
+Drive Sampling (Prasoon)
+- POST /api/prasoon-sampling { folderIdOrLink, count }
+  - Lists PDFs in a Google Drive folder, downloads via Drive API, uploads to GCS, calls Vertex with invoice-only schema, and stores in Firestore collection `Sampling` with `tag='prasoon-sampling'`.
+  - Requires runtime identity to have Drive read access to the folder.
+- GET /prasoon-sampling-summary
+  - UI summary with: column filtering, sorting, toggle to show only rows missing Invoice_Number, “view invoice” link to Drive, and overall average that includes all rows (rows without Invoice_Number contribute 0).
+- POST /api/prasoon-retry { recordId }
+  - Reprocesses a stored `gcsUri` for one record via Vertex and updates `extracted` and `avg_confidence_score` (average computed ignoring 0 confidences per-field).
+
 Credentials & Auth (ADC)
 - Production: Functions run with an attached runtime service account (ADC). No JSON keys.
 - Local UI: Call deployed functions to keep ADC parity.
 - If you must run local server routes, provide GOOGLE_APPLICATION_CREDENTIALS_JSON only for local dev (never commit).
+
+Drive API (ADC local dev)
+- For local Next.js API routes that call Drive:
+  - Set quota project and enable Drive API once:
+    - gcloud auth application-default set-quota-project <projectId>
+    - gcloud services enable drive.googleapis.com --project <projectId>
+  - Login with Drive scope:
+    - gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/drive.readonly
+  - In production, share the folder with the Hosting SSR service account (e.g., firebase-app-hosting-compute@<project>.iam.gserviceaccount.com).
 
 Service Accounts & IAM
 - Runtime SA (e.g., vertex-runner@<project>.iam.gserviceaccount.com)
@@ -139,6 +157,9 @@ API Reference
   - Response: { url, expires }
 - GET /api/verify-auth
   - Response: server auth + config (unlinked in UI)
+- POST /api/prasoon-sampling { folderIdOrLink, count }
+- GET /prasoon-sampling-summary
+- POST /api/prasoon-retry { recordId }
 
 Cost Controls
 - Firestore caching (process + signed URLs) reduces Vertex and signing calls
@@ -149,4 +170,3 @@ Roadmap
 - Persist accepted JSON to Firestore for auditing and downstream use
 - Compare extracted data to Zoho Creator/Books bills
 - Admin dashboard for cache hits/misses and latency
-
