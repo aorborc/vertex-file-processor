@@ -494,6 +494,27 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       payloadData[cf] = confidenceFor(baseField);
     }
 
+    // Normalize dates to Zoho's expected dd-MM-yyyy format
+    try {
+      const raw = payloadData.Invoice_Date;
+      if (typeof raw === 'string' && raw.trim()) {
+        const s = raw.trim();
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); // YYYY-MM-DD
+        if (m) {
+          payloadData.Invoice_Date = `${m[3]}-${m[2]}-${m[1]}`; // DD-MM-YYYY
+        } else {
+          const d = new Date(s);
+          if (!isNaN(d.getTime())) {
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const yyyy = d.getFullYear();
+            payloadData.Invoice_Date = `${dd}-${mm}-${yyyy}`;
+          }
+        }
+        console.log('Invoice_Date normalized for Zoho', { input: raw, output: payloadData.Invoice_Date });
+      }
+    } catch {}
+
     // Extract Zoho File_ID from fileUrl and include as number
     function extractZohoFileId(urlStr) {
       try {
