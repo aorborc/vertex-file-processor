@@ -357,6 +357,10 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
 
     // Prepare data: include only top-level primitives from extracted (19 fields + 19 *_confidence)
     const extracted = modelJsonWithConfidence || {};
+    try {
+      const ek = extracted && typeof extracted === 'object' ? Object.keys(extracted) : [];
+      console.log('Extracted JSON keys/count', { count: ek.length, keys: ek.slice(0, 12) });
+    } catch {}
     // Build normalized key map for flexible matching
     function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); }
     const normMap = {};
@@ -487,11 +491,21 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     if (!fileId) {
       return res.status(400).json({ error: 'Unable to extract File_ID from fileUrl. Ensure it is a Zoho public file download URL.' });
     }
-    const fileIdNum = Number(fileId);
-    if (!Number.isFinite(fileIdNum)) {
-      return res.status(400).json({ error: 'Invalid File_ID parsed from fileUrl' });
-    }
-    payloadData.File_ID = fileIdNum;
+    // Do NOT coerce to Number to avoid precision loss for 17-18 digit IDs
+    const fileIdIsSafe = Number.isSafeInteger(Number(fileId));
+    console.log('Parsed Zoho File_ID', { fileId, fileIdIsSafe, len: String(fileId).length });
+    payloadData.File_ID = String(fileId);
+
+    // Debug logging (non-sensitive)
+    try {
+      const payloadKeys = Object.keys(payloadData);
+      const sample = {};
+      for (const k of ['Invoice_Number','Invoice_Date','Seller_GSTIN','Buyer_GSTIN','Total_Tax_Amount','IRN_Details','File_ID']) {
+        if (k in payloadData) sample[k] = payloadData[k];
+      }
+      console.log('Zoho payload keys/count', { count: payloadKeys.length, keys: payloadKeys.slice(0, 10) });
+      console.log('Zoho payload sample', sample);
+    } catch (e) { /* ignore logging errors */ }
 
     // Optionally attach gsUri if the form supports it; controlled via env flag
     if (String(process.env.ZC_INCLUDE_GCS_URI || 'false').toLowerCase() === 'true') {
@@ -508,6 +522,11 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
         timeout: 60_000,
         validateStatus: () => true, // pass through Zoho status
       });
+      try {
+        console.log('Zoho response status', zres.status);
+        const preview = typeof zres.data === 'string' ? zres.data.slice(0, 500) : JSON.stringify(zres.data).slice(0, 500);
+        console.log('Zoho response body (preview)', preview);
+      } catch {}
       return res.status(zres.status || 200).json(zres.data);
     } catch (e) {
       const status = e?.response?.status || 500;
