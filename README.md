@@ -1,6 +1,6 @@
 Vertex File Processor (Next.js, JS)
 
-This app accepts a PDF URL and a prompt, downloads the file, uploads it to Google Cloud Storage, calls Vertex AI (Gemini 1.5) with the file + prompt, and returns the result as JSON.
+This app accepts a PDF URL and a prompt, uploads the file to Google Cloud Storage, calls Vertex AI (Gemini) with the file + prompt, then posts the extracted fields to a Zoho Creator form. The API returns Zoho Creator’s add‑record response.
 
 Setup
 - Node: 18+
@@ -23,6 +23,14 @@ Repository
 
 Full Documentation
 - See `docs/README.md` for comprehensive user + technical documentation (architecture, IAM, caching, deployment, troubleshooting, and API details).
+
+Zoho Creator Integration
+- Publish API endpoint used: `https://www.zohoapis.in/creator/v2.1/publish/deloittettipl/trade-invoice-platform/form/Google_AI_SCAN_Response?privatelink=...`
+- The `privatelink` is currently hardcoded in `functions/index.js`.
+- The payload maps these field link names exactly (case-sensitive):
+  - 19 fields: Invoice_Number, Invoice_Date, Seller_GSTIN, Seller_PAN, Seller_Name, Buyer_GSTIN, Buyer_Name, Buyer_PAN, Ship_to_GSTIN, Ship_to_Name, Sub_Total_Amount, Discount_Amount, CGST_Amount, SGST_Amount, IGST_Amount, CESS_Amount, Additional_Cess_Amount, Total_Tax_Amount, IRN_Details
+  - 19 confidences: Invoice_Number_Confidence, Invoice_Date_Confidence, Seller_GST_Confidence, Seller_PAN_Confidence, Seller_Name_Confidence, Buyer_GSTIN_Confidence, Buyer_Name_Confidence, Buyer_PAN_Confidence, Ship_to_GSTIN_Confidence, Ship_to_Name_Confidence, Sub_Total_Amount_Confidence, Discount_Amount_Confidence, CGST_Amount_Confidence, SGST_Amount_Confidence, IGST_Amount_Confidence, CESS_Amount_Confidence, Additional_cess_Amount_Confidence, Total_Tax_Amount_Confidence, IRN_Details_Confidence
+- When `fileUrl` is a Zoho public file download URL, the function also includes `File_ID` (record id parsed from the URL) in the Zoho payload.
 
 Prasoon Sampling (Google Drive)
 - POST `/api/prasoon-sampling` with `{ "folderIdOrLink": "<Drive folder ID or URL>", "count": 185 }`
@@ -47,99 +55,26 @@ Local Dev Notes (Drive API)
 
 API
 - `POST /api/process-file`
-  - body: `{ "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf", "prompt": "..." }`
-  - response: `{ success, gcsUri: "gs://...", vertex: {...} }`
-  - Behavior:
-    - Accepts either http/https URL or an existing `gs://` URL.
-    - If `VERTEX_INPUT=inline` (function env), the function uploads to GCS but sends the content inline to Vertex to avoid GCS reads by Vertex.
+  - Body: `{ "fileUrl": "https://..." | "gs://...", "prompt": "...", "reset"?: true }`
+    - If `fileUrl` matches Zoho public file pattern `/file/{owner}/{app}/{form}/{recordId}/upload_invoice/download/{privatelink}?filepath=...`, `{recordId}` is sent to Zoho as `File_ID`.
+    - If `VERTEX_INPUT=inline` (function env), content is sent inline to Vertex.
+  - Response: Direct pass-through of Zoho Creator Publish API JSON (status preserved).
 - `GET /api/verify-auth`
   - response: `{ authMode, projectId, location, model, bucket, hasCredentialsJson }`
 
-Request
+Request example
 
 ```
 POST /api/process-file
 Content-Type: application/json
 
 {
-  "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf",
-  "prompt": "<instruction>"
+  "fileUrl": "https://creatorapp.zohopublic.in/file/deloittettipl/trade-invoice-platform/Files/133740007807502149/upload_invoice/download/<privatelink>?filepath=/123.pdf",
+  "prompt": "Extract the 19 specified invoice fields and provide confidences"
 }
 ```
 
-Response (sample)
-
-```json
-{
-  "success": true,
-  "gcsUri": "gs://<bucket>/uploads/<timestamp>-<id>.pdf",
-  "extracted": {
-    "supplier_name": "ACME Corp",
-    "supplier_name_confidence": 0.98,
-    "supplier_address": "123 Example St, City",
-    "supplier_address_confidence": 0.95,
-    "supplier_tax_id": "27ABCDE1234Z1Z5",
-    "supplier_tax_id_confidence": 0.9,
-    "invoice_number": "INV-12345",
-    "invoice_number_confidence": 0.99,
-    "invoice_date": "2025-08-31",
-    "invoice_date_confidence": 0.98,
-    "due_date": "2025-09-30",
-    "due_date_confidence": 0.8,
-    "bill_to": "Cloudstore Retail Pvt Ltd ...",
-    "bill_to_confidence": 0.95,
-    "ship_to": "Cloudstore Retail Pvt Ltd ...",
-    "ship_to_confidence": 0.95,
-    "currency": "INR",
-    "currency_confidence": 0.7,
-    "subtotal": 3990.0,
-    "subtotal_confidence": 0.9,
-    "tax": 0.0,
-    "tax_confidence": 0.5,
-    "total": 3990.0,
-    "total_confidence": 0.99,
-    "line_items": [
-      {
-        "description": "French Beans",
-        "description_confidence": 0.99,
-        "quantity": 10,
-        "quantity_confidence": 0.99,
-        "unit_price": 90,
-        "unit_price_confidence": 0.99,
-        "amount": 900.0,
-        "amount_confidence": 0.99
-      }
-    ],
-    "fields_confidence": {
-       "supplier_name": 0.98,
-       "invoice_number": 0.99,
-       "total": 0.99
-    }
-  },
-  "extractedRaw": {
-    "supplier_name": "ACME Corp",
-    "supplier_address": "123 Example St, City",
-    "supplier_tax_id": "27ABCDE1234Z1Z5",
-    "invoice_number": "INV-12345",
-    "invoice_date": "2025-08-31",
-    "due_date": "2025-09-30",
-    "bill_to": "Cloudstore Retail Pvt Ltd ...",
-    "ship_to": "Cloudstore Retail Pvt Ltd ...",
-    "currency": "INR",
-    "subtotal": 3990.0,
-    "tax": 0.0,
-    "total": 3990.0,
-    "line_items": [
-      { "description": "French Beans", "quantity": 10, "unit_price": 90, "amount": 900.0, "confidence": 0.99 }
-    ],
-    "fields_confidence": { "supplier_name": 0.98, "invoice_number": 0.99, "total": 0.99 }
-  },
-  "vertex": {
-    "modelVersion": "gemini-2.5-pro",
-    "candidates": [ { "content": { "role": "model", "parts": [ { "text": "..." } ] } } ]
-  }
-}
-```
+Response: The JSON returned by Zoho Creator Publish API (e.g., success, data/id/errors depending on your form validation).
 
 Notes
 - Do not commit real credentials. Use `.env.local` for local development.

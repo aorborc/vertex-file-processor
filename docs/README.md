@@ -11,14 +11,12 @@ Overview
 
 High-level Flow
 - UI POSTs PDF URL + prompt to processFile
-- If http/https URL:
-  - Download, upload to GCS, cache URL→GCS mapping (urlCache)
-- If gs:// URL: use directly
+- If http/https URL: download, upload to GCS, cache URL→GCS mapping (urlCache). If gs:// URL: use directly
 - processFile computes cache key hash(gsUri|model|prompt)
-  - Cache hit: return cached response
+  - Cache hit: reuse extracted JSON but still post to Zoho
   - Cache miss: call Vertex AI, postprocess JSON, cache response (processCache)
-- UI displays response, allows Preview
-- Preview requests signed URL from signedUrl function (TTL up to 7 days), which uses signedUrlCache to reuse URLs when possible
+- processFile maps 19 fields + 19 confidences to Zoho Creator form `Google_AI_SCAN_Response`, includes `File_ID` parsed from Zoho file URLs, and POSTs to Zoho Publish API
+- API returns the Zoho response (status + body)
 
 Environments & Endpoints
 - Hosting rewrites: /api/process-file → processFile, /api/signed-url → signedUrl
@@ -110,13 +108,14 @@ UI Usage (Preview)
 
 Back-end Behavior (processFile)
 - Input: { fileUrl: string (gs:// or https), prompt: string, reset?: boolean }
-- Output: { success, gcsUri, extracted, extractedRaw, vertex, cachedProcess?, cachedAt? }
+- Output: direct Zoho Creator Publish API JSON
 - Internal steps:
   1) If https, check urlCache, else download and upload to GCS, then save urlCache
-  2) Compute cache key; if not reset, return processCache if found
+  2) Compute cache key; if not reset, reuse cached extracted JSON if present
   3) Call Vertex AI using fileData (fileUri) or inlineData fallback
-  4) Parse model output to JSON; propagate field-level confidences
-  5) Save processCache and return response
+  4) Parse model output to JSON; attach *_confidence fields
+  5) Build Zoho payload with the 19 fields and 19 confidences; if fileUrl is a Zoho file link, include `File_ID`
+  6) POST to Zoho Publish API and return its response
 
 Back-end Behavior (signedUrl)
 - Input: ?gsUri=gs://...&ttlSec=604800 (max 7 days)
@@ -152,7 +151,8 @@ Troubleshooting
 API Reference
 - POST /api/process-file
   - Body: { fileUrl: "gs://..." | "https://...", prompt: string, reset?: boolean }
-  - Response: { success, gcsUri, extracted, extractedRaw, vertex, cachedProcess?, cachedAt? }
+  - Response: Zoho Creator Publish API JSON
+  - Notes: If `fileUrl` matches Zoho public file pattern `/file/{owner}/{app}/{form}/{recordId}/upload_invoice/download/{privatelink}?filepath=...`, `{recordId}` is sent to Zoho as `File_ID`.
 - GET /api/signed-url?gsUri=gs://...&ttlSec=...
   - Response: { url, expires }
 - GET /api/verify-auth

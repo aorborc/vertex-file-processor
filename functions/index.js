@@ -208,10 +208,19 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
 
     // Process result cache by gsUri+prompt+model
     const procId = hashId(`${gsUri}|${model}|${prompt}`);
+    let cachedProcess = false;
+    let cachedAt = null;
+    let modelJson = null;
+    let modelJsonWithConfidence = null;
+    let vertex;
     if (!reset) {
       const procCached = await readCache('processCache', procId);
-      if (procCached && procCached.vertex) {
-        return res.status(200).json({ success: true, gcsUri: gsUri, cachedProcess: true, cachedAt: procCached.updatedAt || procCached.createdAt || null, extracted: procCached.extracted || null, extractedRaw: procCached.extractedRaw || null, vertex: procCached.vertex });
+      if (procCached && (procCached.vertex || procCached.extracted || procCached.extractedRaw)) {
+        cachedProcess = true;
+        cachedAt = procCached.updatedAt || procCached.createdAt || null;
+        vertex = procCached.vertex;
+        modelJsonWithConfidence = procCached.extracted || null;
+        modelJson = procCached.extractedRaw || null;
       }
     }
 
@@ -219,30 +228,9 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     const inputMode = (process.env.VERTEX_INPUT || "gcs").toLowerCase();
     const inlineBase64 = bufferForInline ? bufferForInline.toString("base64") : null;
 
-    let vertex;
-    try {
-      if (inputMode === "inline" && inlineBase64) {
-        vertex = await callVertex({
-          location,
-          model,
-          prompt,
-          inlineDataBase64: inlineBase64,
-          inlineMimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
-        });
-      } else {
-        vertex = await callVertex({
-          location,
-          model,
-          prompt,
-          gsUri,
-          mimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
-        });
-      }
-    } catch (e) {
-      const msg = String(e?.message || e);
-      // Fallback to inline if service agent isn't ready or lacks access
-      if (inlineBase64 && /Service agents are being provisioned|Permission|not\s*found/i.test(msg)) {
-        try {
+    if (!vertex) {
+      try {
+        if (inputMode === "inline" && inlineBase64) {
           vertex = await callVertex({
             location,
             model,
@@ -250,11 +238,33 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
             inlineDataBase64: inlineBase64,
             inlineMimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
           });
-        } catch (e2) {
-          return res.status(500).json({ error: String(e2?.message || e2) });
+        } else {
+          vertex = await callVertex({
+            location,
+            model,
+            prompt,
+            gsUri,
+            mimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
+          });
         }
-      } else {
-        return res.status(500).json({ error: msg });
+      } catch (e) {
+        const msg = String(e?.message || e);
+        // Fallback to inline if service agent isn't ready or lacks access
+        if (inlineBase64 && /Service agents are being provisioned|Permission|not\s*found/i.test(msg)) {
+          try {
+            vertex = await callVertex({
+              location,
+              model,
+              prompt,
+              inlineDataBase64: inlineBase64,
+              inlineMimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
+            });
+          } catch (e2) {
+            return res.status(500).json({ error: String(e2?.message || e2) });
+          }
+        } else {
+          return res.status(500).json({ error: msg });
+        }
       }
     }
 
@@ -302,9 +312,11 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       return out;
     }
 
-    const modelText = extractTextFromVertex(vertex);
-    const modelJson = parseJsonLoose(modelText);
-    const modelJsonWithConfidence = withFieldConf(modelJson);
+    if (!modelJsonWithConfidence) {
+      const modelText = extractTextFromVertex(vertex);
+      modelJson = parseJsonLoose(modelText);
+      modelJsonWithConfidence = withFieldConf(modelJson);
+    }
 
     // cache process result best-effort
     await writeCache('processCache', procId, {
@@ -317,13 +329,191 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       createdAt: new Date().toISOString(),
     });
 
-    return res.status(200).json({
-      success: true,
-      gcsUri: gsUri,
-      extracted: modelJsonWithConfidence || null,
-      extractedRaw: modelJson || null,
-      vertex,
-    });
+    // Build payload for Zoho Creator Publish API (add record)
+    // Endpoint pattern:
+    // https://{dc}/creator/v2.1/publish/{owner}/{app}/form/{form}?privatelink=...
+    function getZohoBaseFromEnv() {
+      const explicit = process.env.ZC_CREATOR_BASE || process.env.ZC_DC_BASE || "";
+      if (explicit) return explicit.replace(/\/$/, "");
+      const reportUrl = process.env.ZC_FILES_REPORT_URL || "";
+      try {
+        if (reportUrl) {
+          const u = new URL(reportUrl);
+          return `${u.protocol}//${u.hostname}`;
+        }
+      } catch {}
+      return "https://www.zohoapis.in"; // sensible default for .in DC
+    }
+
+    const owner = process.env.ZC_OWNER_NAME || "deloittettipl";
+    const app = process.env.ZC_APP_LINK_NAME || "trade-invoice-platform";
+    const form = process.env.ZC_FORM_LINK_NAME || "Google_AI_SCAN_Response";
+    const privatelink = process.env.ZC_PRIVATE_LINK || (process.env.ZC_FILES_REPORT_URL ? (new URL(process.env.ZC_FILES_REPORT_URL).searchParams.get("privatelink")) : "");
+    const base = getZohoBaseFromEnv();
+    // Hardcode privatelink as requested
+    const hardCodedPrivateLink = "qQG7EaTbdZp5WYvTxmRYbAt25BNtg1feme3X4kP8601wsUCwzXuPRVjWkJpNNwXxrD3gdaPUdwZ2FJeARzT8FyaJrUsfzCvFVRpF";
+    const effectivePrivateLink = hardCodedPrivateLink || privatelink;
+    const zohoUrl = `${base}/creator/v2.1/publish/${owner}/${app}/form/${encodeURIComponent(form)}?privatelink=${encodeURIComponent(effectivePrivateLink)}`;
+
+    // Prepare data: include only top-level primitives from extracted (19 fields + 19 *_confidence)
+    const extracted = modelJsonWithConfidence || {};
+    // Build normalized key map for flexible matching
+    function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); }
+    const normMap = {};
+    if (extracted && typeof extracted === 'object') {
+      for (const [k, v] of Object.entries(extracted)) {
+        normMap[normKey(k)] = v;
+      }
+    }
+    function firstExisting(keys) {
+      for (const k of keys) {
+        const nk = normKey(k);
+        if (Object.prototype.hasOwnProperty.call(normMap, nk)) return normMap[nk];
+      }
+      return null;
+    }
+
+    const baseFields = [
+      'Invoice_Number',
+      'Invoice_Date',
+      'Seller_GSTIN',
+      'Seller_PAN',
+      'Seller_Name',
+      'Buyer_GSTIN',
+      'Buyer_Name',
+      'Buyer_PAN',
+      'Ship_to_GSTIN',
+      'Ship_to_Name',
+      'Sub_Total_Amount',
+      'Discount_Amount',
+      'CGST_Amount',
+      'SGST_Amount',
+      'IGST_Amount',
+      'CESS_Amount',
+      'Additional_Cess_Amount',
+      'Total_Tax_Amount',
+      'IRN_Details',
+    ];
+
+    const synonyms = {
+      Invoice_Number: ['invoice_number', 'invoice_no', 'invoiceid', 'invoice_id', 'inv_no'],
+      Invoice_Date: ['invoice_date', 'date_of_invoice', 'inv_date', 'invoice_dt', 'date'],
+      Seller_GSTIN: ['seller_gstin', 'supplier_gstin', 'seller_gst', 'supplier_gst'],
+      Seller_PAN: ['seller_pan', 'supplier_pan'],
+      Seller_Name: ['seller_name', 'supplier_name'],
+      Buyer_GSTIN: ['buyer_gstin', 'recipient_gstin', 'bill_to_gstin'],
+      Buyer_Name: ['buyer_name', 'recipient_name', 'bill_to_name'],
+      Buyer_PAN: ['buyer_pan', 'recipient_pan'],
+      Ship_to_GSTIN: ['ship_to_gstin', 'shipping_gstin', 'consignee_gstin'],
+      Ship_to_Name: ['ship_to_name', 'shipping_name', 'consignee_name'],
+      Sub_Total_Amount: ['sub_total_amount', 'subtotal_amount', 'sub_total', 'taxable_value', 'taxable_amount'],
+      Discount_Amount: ['discount_amount', 'discount'],
+      CGST_Amount: ['cgst_amount', 'cgst'],
+      SGST_Amount: ['sgst_amount', 'sgst'],
+      IGST_Amount: ['igst_amount', 'igst'],
+      CESS_Amount: ['cess_amount', 'cess'],
+      Additional_Cess_Amount: ['additional_cess_amount', 'additionalcessamount', 'cess_additional_amount'],
+      Total_Tax_Amount: ['total_tax_amount', 'total_tax'],
+      IRN_Details: ['irn_details', 'irn', 'ack_no', 'irn_number'],
+    };
+
+    function valueFor(fieldName) {
+      const syn = synonyms[fieldName] || [];
+      return firstExisting([fieldName, ...syn]);
+    }
+    function confidenceFor(fieldName) {
+      const baseSyn = synonyms[fieldName] || [];
+      const candidates = [
+        `${fieldName}_Confidence`,
+        `${fieldName}_confidence`,
+        `${fieldName}Confidence`,
+        ...baseSyn.map((s) => `${s}_confidence`),
+      ];
+      return firstExisting(candidates);
+    }
+
+    const payloadData = {};
+    // Map 19 fields
+    for (const f of baseFields) {
+      payloadData[f] = valueFor(f);
+    }
+    // Map the 19 confidence fields with exact names as provided
+    const confidenceFields = [
+      'Invoice_Number_Confidence',
+      'Invoice_Date_Confidence',
+      'Seller_GST_Confidence',
+      'Seller_PAN_Confidence',
+      'Seller_Name_Confidence',
+      'Buyer_GSTIN_Confidence',
+      'Buyer_Name_Confidence',
+      'Buyer_PAN_Confidence',
+      'Ship_to_GSTIN_Confidence',
+      'Ship_to_Name_Confidence',
+      'Sub_Total_Amount_Confidence',
+      'Discount_Amount_Confidence',
+      'CGST_Amount_Confidence',
+      'SGST_Amount_Confidence',
+      'IGST_Amount_Confidence',
+      'CESS_Amount_Confidence',
+      'Additional_cess_Amount_Confidence',
+      'Total_Tax_Amount_Confidence',
+      'IRN_Details_Confidence',
+    ];
+
+    function baseNameFromConfidence(cf) {
+      // Turn e.g. Seller_GST_Confidence -> Seller_GSTIN (best-effort),
+      // or Additional_cess_Amount_Confidence -> Additional_Cess_Amount
+      if (cf === 'Seller_GST_Confidence') return 'Seller_GSTIN';
+      if (cf === 'Additional_cess_Amount_Confidence') return 'Additional_Cess_Amount';
+      return cf.replace(/_Confidence$/i, '');
+    }
+    for (const cf of confidenceFields) {
+      const baseField = baseNameFromConfidence(cf);
+      payloadData[cf] = confidenceFor(baseField);
+    }
+
+    // Extract Zoho File_ID from fileUrl and include as number
+    function extractZohoFileId(urlStr) {
+      try {
+        const u = new URL(urlStr);
+        // Accept creatorapp.zohopublic.* or creatorapp.zoho.* domains
+        if (!/creatorapp\.(zohopublic|zoho)\./i.test(u.hostname)) return null;
+        // Expect path: /file/{owner}/{app}/{form}/{recordId}/upload_invoice/download/{privatelink}
+        const m = u.pathname.match(/\/file\/[^/]+\/[^/]+\/[^/]+\/(\d+)\//);
+        return m ? m[1] : null;
+      } catch { return null; }
+    }
+    const fileId = extractZohoFileId(fileUrl);
+    if (!fileId) {
+      return res.status(400).json({ error: 'Unable to extract File_ID from fileUrl. Ensure it is a Zoho public file download URL.' });
+    }
+    const fileIdNum = Number(fileId);
+    if (!Number.isFinite(fileIdNum)) {
+      return res.status(400).json({ error: 'Invalid File_ID parsed from fileUrl' });
+    }
+    payloadData.File_ID = fileIdNum;
+
+    // Optionally attach gsUri if the form supports it; controlled via env flag
+    if (String(process.env.ZC_INCLUDE_GCS_URI || 'false').toLowerCase() === 'true') {
+      payloadData.gcs_uri = gsUri;
+    }
+
+    try {
+      const zres = await axios.post(zohoUrl, { data: payloadData }, {
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'vertex-file-processor/1.0 (+https://github.com/aorborc/vertex-file-processor)'
+        },
+        timeout: 60_000,
+        validateStatus: () => true, // pass through Zoho status
+      });
+      return res.status(zres.status || 200).json(zres.data);
+    } catch (e) {
+      const status = e?.response?.status || 500;
+      const data = e?.response?.data || { error: String(e?.message || e) };
+      return res.status(status).json(data);
+    }
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err?.message || "Unknown error" });
