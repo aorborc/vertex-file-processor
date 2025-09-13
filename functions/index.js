@@ -314,7 +314,14 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
 
     if (!modelJsonWithConfidence) {
       const modelText = extractTextFromVertex(vertex);
+      try {
+        console.log('Vertex text (preview)', (modelText || '').slice(0, 800));
+      } catch {}
       modelJson = parseJsonLoose(modelText);
+      try {
+        const mjPreview = JSON.stringify(modelJson || {}).slice(0, 1500);
+        console.log('Vertex JSON (preview)', mjPreview);
+      } catch {}
       modelJsonWithConfidence = withFieldConf(modelJson);
     }
 
@@ -524,6 +531,10 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     }
 
     try {
+      try {
+        const payloadPreview = JSON.stringify(payloadData);
+        console.log('Zoho payload (full)', payloadPreview);
+      } catch {}
       const zres = await axios.post(zohoUrl, { data: payloadData }, {
         headers: {
           'Content-Type': 'application/json',
