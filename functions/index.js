@@ -355,24 +355,29 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     const effectivePrivateLink = hardCodedPrivateLink || privatelink;
     const zohoUrl = `${base}/creator/v2.1/publish/${owner}/${app}/form/${encodeURIComponent(form)}?privatelink=${encodeURIComponent(effectivePrivateLink)}`;
 
-    // Prepare data: include only top-level primitives from extracted (19 fields + 19 *_confidence)
+    // Prepare data maps for flexible matching (flatten common wrappers)
     const extracted = modelJsonWithConfidence || {};
     try {
       const ek = extracted && typeof extracted === 'object' ? Object.keys(extracted) : [];
       console.log('Extracted JSON keys/count', { count: ek.length, keys: ek.slice(0, 12) });
     } catch {}
-    // Build normalized key map for flexible matching
     function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''); }
-    const normMap = {};
-    if (extracted && typeof extracted === 'object') {
-      for (const [k, v] of Object.entries(extracted)) {
-        normMap[normKey(k)] = v;
-      }
+    const normMap = {};   // values
+    const confMap = {};   // confidences
+    function addToMap(obj, map) {
+      if (!obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) map[normKey(k)] = v;
     }
-    function firstExisting(keys) {
+    addToMap(extracted, normMap);
+    if (extracted && typeof extracted === 'object') {
+      if (extracted.fields && typeof extracted.fields === 'object') addToMap(extracted.fields, normMap);
+      if (extracted.field_confidence && typeof extracted.field_confidence === 'object') addToMap(extracted.field_confidence, confMap);
+      if (extracted.fields_confidence && typeof extracted.fields_confidence === 'object') addToMap(extracted.fields_confidence, confMap);
+    }
+    function firstExisting(keys, map = normMap) {
       for (const k of keys) {
         const nk = normKey(k);
-        if (Object.prototype.hasOwnProperty.call(normMap, nk)) return normMap[nk];
+        if (Object.prototype.hasOwnProperty.call(map, nk)) return map[nk];
       }
       return null;
     }
@@ -427,13 +432,19 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     }
     function confidenceFor(fieldName) {
       const baseSyn = synonyms[fieldName] || [];
-      const candidates = [
+      // Prefer explicit *_confidence keys if present in flattened values map
+      const cands1 = [
         `${fieldName}_Confidence`,
         `${fieldName}_confidence`,
         `${fieldName}Confidence`,
         ...baseSyn.map((s) => `${s}_confidence`),
       ];
-      return firstExisting(candidates);
+      const v1 = firstExisting(cands1, normMap);
+      if (v1 != null) return v1;
+      // Otherwise look up confidence by base field key in confMap
+      const cands2 = [fieldName, ...baseSyn];
+      const v2 = firstExisting(cands2, confMap);
+      return v2;
     }
 
     const payloadData = {};
