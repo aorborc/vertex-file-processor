@@ -38,10 +38,7 @@ export async function POST(request) {
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
     const locationRaw = body?.location;
     const location = typeof locationRaw === 'string' && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || "us-central1");
-    const modelCandidates = [body?.model, body?.vertexModel];
-    const requestedModel = modelCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
-    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, '') : '';
-    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const model = "gemini-2.5-flash";
     const useBatchRaw = body?.useBatch;
     const useBatch = (() => {
       if (useBatchRaw == null) return true;

@@ -50,14 +50,6 @@ async function getAccessToken() {
   return token.token;
 }
 
-const THINKING_MODEL_HINTS = [/gemini-2\.5-pro/i];
-
-function modelSupportsThinking(name) {
-  if (!name) return false;
-  const lower = String(name).toLowerCase();
-  return THINKING_MODEL_HINTS.some((expr) => expr.test(lower));
-}
-
 function normalizeVertexRequests({ requests, prompt, inlineDataBase64, inlineMimeType, gsUri, mimeType }) {
   const basePrompt = typeof prompt === "string" ? prompt : "";
   const hasExplicit = Array.isArray(requests) && requests.length > 0;
@@ -106,13 +98,11 @@ function normalizeVertexRequests({ requests, prompt, inlineDataBase64, inlineMim
 
 async function callVertex({ location, model, prompt, gsUri, mimeType, inlineDataBase64, inlineMimeType, requests, useBatch = true }) {
   const token = await getAccessToken();
-  const normalizedModel = typeof model === "string" && model.trim() ? model.trim() : (process.env.VERTEX_MODEL || "gemini-2.5-flash");
+  const normalizedModel = "gemini-2.5-flash";
   const fallbackCandidates = [
     normalizedModel,
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
     "gemini-2.0-flash-001",
-    "gemini-1.5-pro-002",
     "gemini-1.5-flash-002",
   ];
   const modelsToTry = Array.from(new Set(fallbackCandidates.filter(Boolean)));
@@ -138,12 +128,17 @@ async function callVertex({ location, model, prompt, gsUri, mimeType, inlineData
 
         const body = { contents: [{ role: "user", parts }] };
         const generationConfig = { ...(req.generationConfig || {}) };
-        if (modelSupportsThinking(m)) {
-          generationConfig.thinkingConfig = {
-            ...(generationConfig.thinkingConfig || {}),
-            includeThoughts: false,
-          };
-        }
+        const thinkingConfigProto = {
+          ...(generationConfig.thinking_config || {}),
+          include_thoughts: false,
+          thinking_budget: 0,
+        };
+        generationConfig.thinking_config = thinkingConfigProto;
+        generationConfig.thinkingConfig = {
+          ...(generationConfig.thinkingConfig || {}),
+          includeThoughts: false,
+          thinkingBudget: 0,
+        };
         if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
         if (req.systemInstruction) body.systemInstruction = req.systemInstruction;
         if (req.tools) body.tools = req.tools;
@@ -323,6 +318,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     const { fileUrl, prompt } = body;
     const resetRaw = (req.query && req.query.reset) || (body && body.reset);
     const reset = String(resetRaw).toLowerCase() === 'true' || resetRaw === 1 || resetRaw === '1';
+    if (reset) console.log('Reset flag ignored: vertex response caching disabled');
     if (!fileUrl) return res.status(400).json({ error: "Missing fileUrl" });
     const isGs = typeof fileUrl === "string" && fileUrl.startsWith("gs://");
     if (!isGs && !validateUrl(fileUrl)) return res.status(400).json({ error: "Invalid fileUrl (must be http/https or gs://)" });
@@ -333,10 +329,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
 
     const locationRaw = (body && body.location) || (req.query && req.query.location);
     const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || defaultRegion);
-    const modelCandidates = [body?.model, body?.vertexModel, req.query && req.query.model];
-    const requestedModel = modelCandidates.find((val) => typeof val === "string" && val.trim());
-    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, "") : "";
-    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const model = "gemini-2.5-flash";
     const useBatchRaw = body?.useBatch ?? (req.query && req.query.useBatch);
     const useBatch = (() => {
       if (useBatchRaw == null) return true;
@@ -379,23 +372,10 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       }
     }
 
-    // Process result cache by gsUri+prompt+model
-    const procId = hashId(`${gsUri}|${model}|${prompt}`);
-    let cachedProcess = false;
-    let cachedAt = null;
     let modelJson = null;
     let modelJsonWithConfidence = null;
     let vertex;
-    if (!reset) {
-      const procCached = await readCache('processCache', procId);
-      if (procCached && (procCached.vertex || procCached.extracted || procCached.extractedRaw)) {
-        cachedProcess = true;
-        cachedAt = procCached.updatedAt || procCached.createdAt || null;
-        vertex = procCached.vertex;
-        modelJsonWithConfidence = procCached.extracted || null;
-        modelJson = procCached.extractedRaw || null;
-      }
-    }
+    let usageInfo = null;
 
     // Decide input mode: gcs or inline
     const inputMode = (process.env.VERTEX_INPUT || "gcs").toLowerCase();
@@ -488,6 +468,59 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       return out;
     }
 
+    function extractUsageFromVertex(v) {
+      if (!v || typeof v !== 'object') return null;
+      const src = (v.usageMetadata && typeof v.usageMetadata === 'object') ? v.usageMetadata : (v.usage && typeof v.usage === 'object' ? v.usage : null);
+      if (!src) return null;
+
+      const normalizeKey = (key) => String(key || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      const flat = {};
+      for (const [key, value] of Object.entries(src)) {
+        flat[normalizeKey(key)] = value;
+      }
+      const pickNumber = (...candidates) => {
+        for (const candidate of candidates) {
+          const normalized = normalizeKey(candidate);
+          if (Object.prototype.hasOwnProperty.call(flat, normalized)) {
+            const val = flat[normalized];
+            if (typeof val === 'number' && Number.isFinite(val)) return val;
+          }
+        }
+        return null;
+      };
+
+      const usage = {
+        promptTokens: pickNumber('promptTokenCount', 'promptTokens', 'inputTokenCount', 'inputTokens'),
+        inputTokens: pickNumber('inputTokenCount', 'inputTokens', 'promptTokenCount', 'promptTokens'),
+        candidatesTokens: pickNumber('candidatesTokenCount', 'candidatesTokens', 'completionTokenCount', 'completionTokens', 'outputTokenCount', 'outputTokens', 'responseTokens'),
+        outputTokens: pickNumber('outputTokenCount', 'outputTokens', 'candidatesTokenCount', 'candidatesTokens', 'completionTokenCount', 'completionTokens', 'responseTokens'),
+        totalTokens: pickNumber('totalTokenCount', 'totalTokens'),
+        thinkingTokens: pickNumber('thinkingTokenCount', 'thinkingTokens', 'thoughtTokenCount', 'thoughtTokens', 'reasoningTokenCount', 'reasoningTokens'),
+        cachedContentTokens: pickNumber('cachedContentTokenCount', 'cachedContentTokens', 'cachedTokens'),
+        inputImageTokens: pickNumber('inputImageTokenCount', 'inputImageTokens', 'imageTokenCount', 'imageTokens'),
+        outputImageTokens: pickNumber('outputImageTokenCount', 'outputImageTokens'),
+        inputAudioTokens: pickNumber('inputAudioTokenCount', 'audioInputTokens'),
+        outputAudioTokens: pickNumber('outputAudioTokenCount', 'audioOutputTokens'),
+        inputVideoTokens: pickNumber('inputVideoTokenCount', 'videoInputTokens'),
+        outputVideoTokens: pickNumber('outputVideoTokenCount', 'videoOutputTokens'),
+        billableTokens: pickNumber('billableTokenCount', 'billableTokens'),
+        billableCharacters: pickNumber('billableCharacterCount', 'billableCharacters'),
+      };
+
+      if (usage.totalTokens == null) {
+        const sumParts = [usage.promptTokens, usage.candidatesTokens, usage.thinkingTokens].filter((val) => typeof val === 'number' && Number.isFinite(val));
+        if (sumParts.length) usage.totalTokens = sumParts.reduce((acc, val) => acc + val, 0);
+      }
+
+      const result = { rawUsage: src };
+      for (const [key, value] of Object.entries(usage)) {
+        if (value != null) result[key] = value;
+      }
+      return result;
+    }
+
+    if (!usageInfo) usageInfo = extractUsageFromVertex(vertex) || null;
+
     if (!modelJsonWithConfidence) {
       const modelText = extractTextFromVertex(vertex);
       try {
@@ -500,17 +533,6 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       } catch {}
       modelJsonWithConfidence = withFieldConf(modelJson);
     }
-
-    // cache process result best-effort
-    await writeCache('processCache', procId, {
-      gcsUri: gsUri,
-      model,
-      prompt,
-      vertex,
-      extracted: modelJsonWithConfidence || null,
-      extractedRaw: modelJson || null,
-      createdAt: new Date().toISOString(),
-    });
 
     // Build payload for Zoho Creator Publish API (add record)
     // Endpoint pattern:
@@ -746,10 +768,22 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
         const preview = typeof zres.data === 'string' ? zres.data.slice(0, 500) : JSON.stringify(zres.data).slice(0, 500);
         console.log('Zoho response body (preview)', preview);
       } catch {}
+      if (usageInfo) {
+        if (zres && zres.data && typeof zres.data === 'object' && !Array.isArray(zres.data)) {
+          return res.status(zres.status || 200).json({ ...zres.data, vertexUsage: usageInfo });
+        }
+        return res.status(zres.status || 200).json({ zoho: zres.data, vertexUsage: usageInfo });
+      }
       return res.status(zres.status || 200).json(zres.data);
     } catch (e) {
       const status = e?.response?.status || 500;
       const data = e?.response?.data || { error: String(e?.message || e) };
+      if (usageInfo) {
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+          return res.status(status).json({ ...data, vertexUsage: usageInfo });
+        }
+        return res.status(status).json({ zoho: data, vertexUsage: usageInfo });
+      }
       return res.status(status).json(data);
     }
   } catch (err) {
