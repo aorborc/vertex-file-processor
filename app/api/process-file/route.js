@@ -36,9 +36,18 @@ export async function POST(request) {
     }
 
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
-    const location = process.env.VERTEX_LOCATION || "us-central1";
-    // Default to latest stable Gemini; override via VERTEX_MODEL
-    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const locationRaw = body?.location;
+    const location = typeof locationRaw === 'string' && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || "us-central1");
+    const modelCandidates = [body?.model, body?.vertexModel];
+    const requestedModel = modelCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, '') : '';
+    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const useBatchRaw = body?.useBatch;
+    const useBatch = (() => {
+      if (useBatchRaw == null) return true;
+      const normalized = String(useBatchRaw).trim().toLowerCase();
+      return !(normalized === 'false' || normalized === '0' || normalized === 'no');
+    })();
     if (!projectId) {
       return new Response(JSON.stringify({ error: "Server missing GOOGLE_CLOUD_PROJECT env" }), { status: 500 });
     }
@@ -74,6 +83,7 @@ export async function POST(request) {
       gsUri,
       prompt,
       mimeType: contentType.includes("pdf") ? "application/pdf" : guessMimeTypeFromUrl(gsUri),
+      useBatch,
     });
 
     return new Response(JSON.stringify({ success: true, gcsUri: gsUri, vertex }), {

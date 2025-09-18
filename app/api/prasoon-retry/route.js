@@ -93,8 +93,18 @@ export async function POST(request) {
     const gcsUri = doc.fields.gcsUri;
     if (!gcsUri || typeof gcsUri !== 'string') return new Response(JSON.stringify({ error: 'Record missing gcsUri' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
 
-    const location = process.env.VERTEX_LOCATION || 'us-central1';
-    const model = process.env.VERTEX_MODEL || 'gemini-2.5-pro';
+    const locationRaw = body?.location;
+    const location = typeof locationRaw === 'string' && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || 'us-central1');
+    const modelCandidates = [body?.model, body?.vertexModel];
+    const requestedModel = modelCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, '') : '';
+    const model = sanitizedModel || process.env.VERTEX_MODEL || 'gemini-2.5-flash';
+    const useBatchRaw = body?.useBatch;
+    const useBatch = (() => {
+      if (useBatchRaw == null) return true;
+      const normalized = String(useBatchRaw).trim().toLowerCase();
+      return !(normalized === 'false' || normalized === '0' || normalized === 'no');
+    })();
     const prompt = buildPrompt();
 
     // Call Vertex
@@ -105,6 +115,7 @@ export async function POST(request) {
       gsUri: gcsUri,
       prompt,
       mimeType: 'application/pdf',
+      useBatch,
     });
     const parts = vertex?.candidates?.[0]?.content?.parts || [];
     const textPart = parts.find((p) => typeof p.text === 'string');
@@ -132,4 +143,3 @@ export async function POST(request) {
     return new Response(JSON.stringify({ error: err?.message || 'Unknown error' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
   }
 }
-

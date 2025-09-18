@@ -91,8 +91,18 @@ export async function POST(request) {
     const bucketName = process.env.GCS_BUCKET;
     if (!bucketName) return new Response(JSON.stringify({ error: "Server missing GCS_BUCKET env" }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     const projectId = (await getProjectId()) || process.env.GOOGLE_CLOUD_PROJECT;
-    const location = process.env.VERTEX_LOCATION || "us-central1";
-    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const locationRaw = body?.location;
+    const location = typeof locationRaw === 'string' && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || "us-central1");
+    const modelCandidates = [body?.model, body?.vertexModel];
+    const requestedModel = modelCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, '') : '';
+    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const useBatchRaw = body?.useBatch;
+    const useBatch = (() => {
+      if (useBatchRaw == null) return true;
+      const normalized = String(useBatchRaw).trim().toLowerCase();
+      return !(normalized === 'false' || normalized === '0' || normalized === 'no');
+    })();
     const dbId = process.env.FIRESTORE_DATABASE_ID || "(default)";
 
     // List PDFs in the folder
@@ -135,6 +145,7 @@ export async function POST(request) {
               gsUri,
               prompt,
               mimeType: 'application/pdf',
+              useBatch,
             });
 
             // Parse model output

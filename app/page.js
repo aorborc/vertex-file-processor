@@ -16,7 +16,7 @@ export default function Page() {
   const [startedAt, setStartedAt] = useState(null);
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || "/api/process-file";
   const signedBase = process.env.NEXT_PUBLIC_SIGNED_URL_API_BASE || "/api/signed-url";
-  const docCurl = 'POST ' + apiBase + '\nContent-Type: application/json\n\n{\n  "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf",\n  "prompt": "<instruction>"\n}';
+  const docCurl = `POST ${apiBase}\nContent-Type: application/json\n\n{\n  "fileUrl": "https://.../file.pdf" | "gs://bucket/path.pdf",\n  "prompt": "<instruction>",\n  "model": "gemini-2.5-flash",\n  "location": "us-central1",\n  "useBatch": true\n}`;
   const sampleResponse = {
     success: true,
     gcsUri: "gs://<bucket>/uploads/<timestamp>-<id>.pdf",
@@ -82,7 +82,7 @@ export default function Page() {
       fields_confidence: { supplier_name: 0.98, invoice_number: 0.99, total: 0.99 }
     },
     vertex: {
-      modelVersion: "gemini-2.5-pro",
+      modelVersion: "gemini-2.5-flash",
       candidates: [{ /* trimmed for brevity */ }]
     }
   };
@@ -241,11 +241,16 @@ export default function Page() {
             <li>Effective API base: <span className="badge mono">{apiBase}</span></li>
             <li>Accepts http/https or gs:// URLs</li>
             <li>Response includes <code>gcsUri</code>, parsed <code>extracted</code>, and full <code>vertex</code></li>
+            <li>Default model: <code>gemini-2.5-flash</code>; override with <code>model</code> or change region via <code>location</code></li>
+            <li>Set <code>useBatch</code> to <code>false</code> to force single-request <code>generateContent</code></li>
             <li>Repository: <a href="https://github.com/aorborc/vertex-file-processor" target="_blank" rel="noreferrer">github.com/aorborc/vertex-file-processor</a></li>
           </ul>
           <div>
             <h3 style={{ margin: 0 }}>Request</h3>
             <pre className="code mono">{docCurl}</pre>
+            <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              <code>model</code>, <code>location</code>, and <code>useBatch</code> are optional; omit them to rely on server defaults.
+            </p>
           </div>
           <div>
             <h3 style={{ margin: 0 }}>Response (sample)</h3>

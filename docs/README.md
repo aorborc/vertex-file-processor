@@ -75,7 +75,7 @@ Caching Semantics
   - TTL cap: 7 days (GCS v4 maximum)
 
 Models
-- Default model: gemini-2.5-pro
+- Default model: gemini-2.5-flash
 - Fallback chain: 2.5-flash → 2.0-flash-001 → 1.5 variants (if not available/allowed)
 - Region: us-central1 by default
 

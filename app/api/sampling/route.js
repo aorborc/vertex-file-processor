@@ -101,7 +101,7 @@ function calcAvgConfidence(doc) {
   return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
-async function processOne({ fileUrl, projectId, location, model, bucketName, recordId }) {
+async function processOne({ fileUrl, projectId, location, model, bucketName, recordId, useBatch }) {
   // Download file and push to GCS
   const mimeFromUrl = guessMimeTypeFromUrl(fileUrl);
   const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 60_000 });
@@ -122,6 +122,7 @@ async function processOne({ fileUrl, projectId, location, model, bucketName, rec
     gsUri,
     prompt,
     mimeType: contentType.includes("pdf") ? "application/pdf" : guessMimeTypeFromUrl(gsUri),
+    useBatch,
   });
   const text = extractTextFromVertex(vertex);
   const parsed = parseJsonLoose(text) || {};
@@ -156,8 +157,18 @@ export async function POST(request) {
     const bucketName = process.env.GCS_BUCKET;
     if (!bucketName) return new Response(JSON.stringify({ error: "Server missing GCS_BUCKET env" }), { status: 500 });
     const projectId = (await getProjectId()) || process.env.GOOGLE_CLOUD_PROJECT;
-    const location = process.env.VERTEX_LOCATION || "us-central1";
-    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const locationRaw = body?.location;
+    const location = typeof locationRaw === 'string' && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || "us-central1");
+    const modelCandidates = [body?.model, body?.vertexModel];
+    const requestedModel = modelCandidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, '') : '';
+    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const useBatchRaw = body?.useBatch;
+    const useBatch = (() => {
+      if (useBatchRaw == null) return true;
+      const normalized = String(useBatchRaw).trim().toLowerCase();
+      return !(normalized === 'false' || normalized === '0' || normalized === 'no');
+    })();
     const dbId = process.env.FIRESTORE_DATABASE_ID || "(default)";
 
     const recordsRaw = await fetchZohoFiles({ reportUrl: zohoReportUrl, count: Math.max(count, 200) });
@@ -187,7 +198,7 @@ export async function POST(request) {
             const fp = parseZohoFilePath(rec?.upload_invoice);
             const fileUrl = buildZohoDownloadUrl({ recordId, filePath: fp, privateLink });
             if (!fileUrl) throw new Error("Unable to construct Zoho file URL");
-            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
+            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId, useBatch });
             const payload = {
               recordId,
               zohoFilePath: fp,
@@ -254,8 +265,17 @@ export async function GET(request) {
     const bucketName = process.env.GCS_BUCKET;
     if (!bucketName) return new Response(JSON.stringify({ error: "Server missing GCS_BUCKET env" }), { status: 500 });
     const projectId = (await getProjectId()) || process.env.GOOGLE_CLOUD_PROJECT;
-    const location = process.env.VERTEX_LOCATION || "us-central1";
-    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const locationParam = url.searchParams.get("location");
+    const location = locationParam && locationParam.trim() ? locationParam.trim() : (process.env.VERTEX_LOCATION || "us-central1");
+    const modelParam = url.searchParams.get("model") || url.searchParams.get("vertexModel");
+    const sanitizedModel = modelParam ? modelParam.trim().replace(/[^a-z0-9._-]/gi, '') : '';
+    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const useBatchParam = url.searchParams.get("useBatch");
+    const useBatch = (() => {
+      if (useBatchParam == null) return true;
+      const normalized = useBatchParam.trim().toLowerCase();
+      return !(normalized === 'false' || normalized === '0' || normalized === 'no');
+    })();
     const dbId = process.env.FIRESTORE_DATABASE_ID || "(default)";
 
     const recordsRaw = await fetchZohoFiles({ reportUrl: zohoReportUrl, count: Math.max(count, 200) });
@@ -283,7 +303,7 @@ export async function GET(request) {
             const fp = parseZohoFilePath(rec?.upload_invoice);
             const fileUrl = buildZohoDownloadUrl({ recordId, filePath: fp, privateLink });
             if (!fileUrl) throw new Error("Unable to construct Zoho file URL");
-            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId });
+            const { gsUri, parsed, avg, usage, inputTokens, outputTokens, sizeBytes } = await processOne({ fileUrl, projectId, location, model, bucketName, recordId, useBatch });
             const payload = {
               recordId,
               zohoFilePath: fp,

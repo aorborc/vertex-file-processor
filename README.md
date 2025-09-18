@@ -9,7 +9,7 @@ Setup
   - `GOOGLE_CLOUD_PROJECT`: your GCP project id (e.g. `gemini-lens-w9we5` from your Firebase project)
   - `GCS_BUCKET`: a bucket accessible by that service account (e.g. Firebase default bucket `gemini-lens-w9we5.appspot.com`)
   - `VERTEX_LOCATION` (optional): defaults to `us-central1`
-  - `VERTEX_MODEL` (optional): defaults to `gemini-2.5-pro` (set to another supported model like `gemini-2.5-flash` or `gemini-2.0-flash-001`)
+  - `VERTEX_MODEL` (optional): defaults to `gemini-2.5-flash` (override with `gemini-2.5-pro` or another supported model as needed)
   - `FIRESTORE_DATABASE_ID` (optional): defaults to `(default)`; set to your named database id (e.g., `sw-vertex-processor`) if you use multi-db
 
 Install & Run
@@ -114,7 +114,7 @@ Use a deployed API in dev
   - The UI will call that URL directly instead of the local `/api/process-file` route.
 
 Notes on models
-- Default model is `gemini-2.5-pro`. Override via `VERTEX_MODEL`.
+- Default model is `gemini-2.5-flash`. Override via `VERTEX_MODEL` for other tiers (e.g., `gemini-2.5-pro`).
 
 Caching
 - Not enabled by default. If you later want caching, we can add Firestore back to map source URLs to `gs://` URIs.
@@ -146,7 +146,7 @@ GCP + Firebase Setup (Step-by-step)
 
 - Vertex AI location & model:
   - Set `VERTEX_LOCATION` to a supported region (e.g., `us-central1`).
-  - Default model is `gemini-2.5-pro`; the code automatically falls back to `gemini-2.5-flash` then `gemini-2.0-flash-001` if a model isn’t available in your project/region.
+  - Default model is `gemini-2.5-flash`; the code automatically falls back to `gemini-2.5-pro`, `gemini-2.0-flash-001`, then legacy models if a model isn’t available in your project/region.
   - You can override with `VERTEX_MODEL` to pin a specific model.
   - Input mode: set `VERTEX_INPUT=inline` to bypass Vertex’s GCS read requirement (handy while service agents are provisioning). Default is `gcs`.
 

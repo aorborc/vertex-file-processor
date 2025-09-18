@@ -50,40 +50,202 @@ async function getAccessToken() {
   return token.token;
 }
 
-async function callVertex({ location, model, prompt, gsUri, mimeType, inlineDataBase64, inlineMimeType }) {
+const THINKING_MODEL_HINTS = [/gemini-2\.5-pro/i];
+
+function modelSupportsThinking(name) {
+  if (!name) return false;
+  const lower = String(name).toLowerCase();
+  return THINKING_MODEL_HINTS.some((expr) => expr.test(lower));
+}
+
+function normalizeVertexRequests({ requests, prompt, inlineDataBase64, inlineMimeType, gsUri, mimeType }) {
+  const basePrompt = typeof prompt === "string" ? prompt : "";
+  const hasExplicit = Array.isArray(requests) && requests.length > 0;
+  const source = hasExplicit ? requests : [{ prompt: basePrompt, inlineDataBase64, inlineMimeType, gsUri, mimeType }];
+  return source.map((entry, index) => {
+    const e = entry || {};
+    const entryPrompt = typeof e.prompt === "string" ? e.prompt : basePrompt;
+    const inlineData = e.inlineDataBase64 || e.inlineData || (!hasExplicit ? inlineDataBase64 : undefined);
+    const inlineType = e.inlineMimeType || e.inline_mime_type || (!hasExplicit ? inlineMimeType : undefined);
+    const fileUri = e.gsUri || e.fileUri || e.file_uri || (!hasExplicit ? gsUri : undefined);
+    const fileMime = e.mimeType || e.fileMimeType || e.file_mime_type || (!hasExplicit ? mimeType : undefined);
+    const generationConfig = e.generationConfig || e.generation_config || null;
+    const systemInstruction = e.systemInstruction || e.system_instruction || null;
+    const tools = e.tools || null;
+    const toolConfig = e.toolConfig || e.tool_config || null;
+    const safetySettings = e.safetySettings || e.safety_settings || null;
+
+    if (inlineData) {
+      if (!inlineType) throw new Error(`callVertex request ${index} missing inlineMimeType`);
+      return {
+        prompt: entryPrompt,
+        inlineDataBase64: inlineData,
+        inlineMimeType: inlineType,
+        generationConfig,
+        systemInstruction,
+        tools,
+        toolConfig,
+        safetySettings,
+      };
+    }
+    if (fileUri && fileMime) {
+      return {
+        prompt: entryPrompt,
+        gsUri: fileUri,
+        mimeType: fileMime,
+        generationConfig,
+        systemInstruction,
+        tools,
+        toolConfig,
+        safetySettings,
+      };
+    }
+    throw new Error(`callVertex request ${index} missing gsUri+mimeType or inline data`);
+  });
+}
+
+async function callVertex({ location, model, prompt, gsUri, mimeType, inlineDataBase64, inlineMimeType, requests, useBatch = true }) {
   const token = await getAccessToken();
-  const preferred = model || "gemini-2.5-pro";
-  const fallbacks = ["gemini-2.5-flash", "gemini-2.0-flash-001", "gemini-1.5-pro-002", "gemini-1.5-flash-002"];
-  const modelsToTry = [preferred, ...fallbacks.filter((m) => m !== preferred)];
+  const normalizedModel = typeof model === "string" && model.trim() ? model.trim() : (process.env.VERTEX_MODEL || "gemini-2.5-flash");
+  const fallbackCandidates = [
+    normalizedModel,
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash-001",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-flash-002",
+  ];
+  const modelsToTry = Array.from(new Set(fallbackCandidates.filter(Boolean)));
+  const project = projectId();
+  if (!project) throw new Error("Unable to determine Google Cloud project id");
+  const resolvedLocation = location || process.env.VERTEX_LOCATION || defaultRegion;
+  const normalizedRequests = normalizeVertexRequests({ requests, prompt, inlineDataBase64, inlineMimeType, gsUri, mimeType });
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
   let lastErr;
   for (const m of modelsToTry) {
-    const parts = [
-      { text: prompt || "" },
-    ];
-    if (inlineDataBase64 && inlineMimeType) {
-      parts.push({ inlineData: { mimeType: inlineMimeType, data: inlineDataBase64 } });
-    } else if (gsUri && mimeType) {
-      parts.push({ fileData: { fileUri: gsUri, mimeType } });
-    } else {
-      throw new Error("callVertex missing input: either inlineDataBase64+inlineMimeType or gsUri+mimeType");
-    }
+    let requestBodies;
+    try {
+      requestBodies = normalizedRequests.map((req) => {
+        const parts = [{ text: req.prompt || "" }];
+        if (req.inlineDataBase64 && req.inlineMimeType) {
+          parts.push({ inlineData: { mimeType: req.inlineMimeType, data: req.inlineDataBase64 } });
+        } else if (req.gsUri && req.mimeType) {
+          parts.push({ fileData: { fileUri: req.gsUri, mimeType: req.mimeType } });
+        } else {
+          throw new Error("callVertex missing input: either inlineDataBase64+inlineMimeType or gsUri+mimeType");
+        }
 
-    const body = { contents: [{ role: "user", parts }] };
-    const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId()}/locations/${location}/publishers/google/models/${m}:generateContent`;
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (res.ok) return data;
-    const msg = data?.error?.message || `Vertex request failed with ${res.status}`;
-    if (res.status === 404 || /not found/i.test(msg)) {
-      lastErr = new Error(`Model ${m} unavailable: ${msg}`);
+        const body = { contents: [{ role: "user", parts }] };
+        const generationConfig = { ...(req.generationConfig || {}) };
+        if (modelSupportsThinking(m)) {
+          generationConfig.thinkingConfig = {
+            ...(generationConfig.thinkingConfig || {}),
+            includeThoughts: false,
+          };
+        }
+        if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
+        if (req.systemInstruction) body.systemInstruction = req.systemInstruction;
+        if (req.tools) body.tools = req.tools;
+        if (req.toolConfig) body.toolConfig = req.toolConfig;
+        if (req.safetySettings) body.safetySettings = req.safetySettings;
+        return body;
+      });
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
       continue;
     }
-    throw new Error(msg);
+
+    const baseUrl = `https://${resolvedLocation}-aiplatform.googleapis.com/v1/projects/${project}/locations/${resolvedLocation}/publishers/google/models/${m}`;
+
+    if (useBatch !== false) {
+      try {
+        const batchEndpoint = `${baseUrl}:batchGenerateContent`;
+        const res = await fetch(batchEndpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ requests: requestBodies }),
+        });
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        if (res.ok) {
+          const responses = Array.isArray(data?.responses) ? data.responses : [];
+          if (requestBodies.length === 1) {
+            return responses[0] || responses || data;
+          }
+          return responses;
+        }
+        const msg = data?.error?.message || `Vertex batch request failed with ${res.status}`;
+        if (res.status === 404 || res.status === 400 || /not found/i.test(msg) || /unimplemented/i.test(msg)) {
+          lastErr = new Error(`Model ${m} batch unavailable: ${msg}`);
+        } else {
+          throw new Error(msg);
+        }
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        if (useBatch === false) {
+          lastErr = e;
+          break;
+        }
+        lastErr = e;
+        // fall back to per-request generateContent for this model
+      }
+    }
+
+    const singleEndpoint = `${baseUrl}:generateContent`;
+    if (requestBodies.length === 1) {
+      const res = await fetch(singleEndpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBodies[0]),
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (res.ok) return data;
+      const msg = data?.error?.message || `Vertex request failed with ${res.status}`;
+      if (res.status === 404 || /not found/i.test(msg)) {
+        lastErr = new Error(`Model ${m} unavailable: ${msg}`);
+        continue;
+      }
+      throw new Error(msg);
+    }
+
+    const responses = [];
+    let retryWithNextModel = false;
+    for (const body of requestBodies) {
+      const res = await fetch(singleEndpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (res.ok) {
+        responses.push(data);
+        continue;
+      }
+      const msg = data?.error?.message || `Vertex request failed with ${res.status}`;
+      if (res.status === 404 || /not found/i.test(msg)) {
+        lastErr = new Error(`Model ${m} unavailable: ${msg}`);
+        retryWithNextModel = true;
+        break;
+      }
+      throw new Error(msg);
+    }
+    if (retryWithNextModel) continue;
+    return responses;
   }
   throw lastErr || new Error("All model attempts failed");
 }
@@ -146,7 +308,7 @@ const saEmail = process.env.FUNCTION_SERVICE_ACCOUNT || (projectId() ? `vertex-r
 // Provide environmentVariables so the deployed function always has explicit values.
 const defaultEnv = {
   VERTEX_LOCATION: process.env.VERTEX_LOCATION || defaultRegion,
-  VERTEX_MODEL: process.env.VERTEX_MODEL || "gemini-2.5-pro",
+  VERTEX_MODEL: process.env.VERTEX_MODEL || "gemini-2.5-flash",
   VERTEX_INPUT: process.env.VERTEX_INPUT || "gcs", // gcs | inline
   FIRESTORE_DATABASE_ID: process.env.FIRESTORE_DATABASE_ID || "sw-vertex-processor",
 };
@@ -157,8 +319,9 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const { fileUrl, prompt } = req.body || {};
-    const resetRaw = (req.query && req.query.reset) || (req.body && req.body.reset);
+    const body = req.body || {};
+    const { fileUrl, prompt } = body;
+    const resetRaw = (req.query && req.query.reset) || (body && body.reset);
     const reset = String(resetRaw).toLowerCase() === 'true' || resetRaw === 1 || resetRaw === '1';
     if (!fileUrl) return res.status(400).json({ error: "Missing fileUrl" });
     const isGs = typeof fileUrl === "string" && fileUrl.startsWith("gs://");
@@ -168,8 +331,18 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
     const bkt = bucketName();
     if (!bkt) return res.status(500).json({ error: "Bucket not configured" });
 
-    const location = process.env.VERTEX_LOCATION || defaultRegion;
-    const model = process.env.VERTEX_MODEL || "gemini-2.5-pro";
+    const locationRaw = (body && body.location) || (req.query && req.query.location);
+    const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : (process.env.VERTEX_LOCATION || defaultRegion);
+    const modelCandidates = [body?.model, body?.vertexModel, req.query && req.query.model];
+    const requestedModel = modelCandidates.find((val) => typeof val === "string" && val.trim());
+    const sanitizedModel = requestedModel ? requestedModel.trim().replace(/[^a-z0-9._-]/gi, "") : "";
+    const model = sanitizedModel || process.env.VERTEX_MODEL || "gemini-2.5-flash";
+    const useBatchRaw = body?.useBatch ?? (req.query && req.query.useBatch);
+    const useBatch = (() => {
+      if (useBatchRaw == null) return true;
+      const normalized = String(useBatchRaw).trim().toLowerCase();
+      return !(normalized === "false" || normalized === "0" || normalized === "no");
+    })();
 
     const storage = new Storage();
     let gsUri;
@@ -237,6 +410,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
             prompt,
             inlineDataBase64: inlineBase64,
             inlineMimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
+            useBatch,
           });
         } else {
           vertex = await callVertex({
@@ -245,6 +419,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
             prompt,
             gsUri,
             mimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
+            useBatch,
           });
         }
       } catch (e) {
@@ -258,6 +433,7 @@ exports.processFile = onRequest({ cors: true, serviceAccount: saEmail, environme
               prompt,
               inlineDataBase64: inlineBase64,
               inlineMimeType: contentType && contentType.includes("pdf") ? "application/pdf" : (guessMimeTypeFromUrl(gsUri) || "application/octet-stream"),
+              useBatch,
             });
           } catch (e2) {
             return res.status(500).json({ error: String(e2?.message || e2) });
